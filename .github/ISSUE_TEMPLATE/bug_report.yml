@@ -45,7 +45,9 @@ body:
     id: logs
     attributes:
       label: Relevant log output / screenshots
-      description: Please paste logs or drag-and-drop screenshots. Remove any sensitive data!
+      description:
+        Please paste logs or drag-and-drop screenshots. Remove any sensitive
+        data!
       render: shell
   - type: input
     id: version
