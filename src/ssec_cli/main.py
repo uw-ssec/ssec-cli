@@ -1,12 +1,13 @@
 """SSEC CLI - A CLI tool built with typer."""
 
 import json
+from datetime import datetime
 import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Tuple
 import typer
 from rich import print
 
@@ -192,6 +193,35 @@ def check_tools():
             print(f"- ✅ {tool}: {path_or_error}")
         else:
             print(f"- ❌ {tool}: {path_or_error}")
+
+
+@app.command(help="Onboard in the current directory")
+def onboard():
+    cwd = Path.cwd()
+    print("Onboarding in", cwd)
+    install_vscode_extensions(cwd)
+    onboard_file = cwd / "onboarded.md"
+    with open(onboard_file, "a", encoding="utf-8") as f:
+        # git github user:
+        user = subprocess.run(
+            "git config --get user.name".split(),
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        # get current commit id of HEAD
+        commit = subprocess.run(
+            "git rev-parse --short HEAD".split(),
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"- User {user} onboarded at commit {commit} on {timestamp}\n")
+    print(
+        f"[green]Onboarding complete! See {onboard_file} and create a pull-request with the changes."
+    )
 
 
 if __name__ == "__main__":
