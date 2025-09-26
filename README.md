@@ -1,7 +1,48 @@
-# project-template
+# SSEC CLI
 
-Blank project repository template for General SSEC projects.
+A CLI tool built with typer and managed with pixi.
 
-This includes some default
-[community health files](https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions/creating-a-default-community-health-file#supported-file-types)
-such as as a code of conduct and license file.
+## Installation
+
+### Using pixi (recommended)
+
+```bash
+# Install pixi if you haven't already
+curl -fsSL https://pixi.sh/install.sh | bash
+
+# Install the CLI in development mode
+pixi run install
+
+# Or install with development dependencies
+pixi run dev-install
+```
+
+### Using pip
+
+```bash
+pip install -e .
+```
+
+## Usage
+
+```bash
+ssec --help
+```
+
+## Development
+
+This project uses pixi for dependency management:
+
+```bash
+# Install in development mode
+pixi run dev-install
+
+# Run tests
+pixi run test
+
+# Lint code
+pixi run lint
+
+# Format code
+pixi run format
+```
