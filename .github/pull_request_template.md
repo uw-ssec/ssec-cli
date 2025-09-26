@@ -22,14 +22,14 @@ Resolves #\<issue-number>
 
 ## 💡 Type of change
 
-| Type            | Checked? |
-|-----------------|----------|
-| 🐞 Bug fix      | [ ] |
-| ✨ New feature   | [ ] |
-| 📝 Documentation | [ ] |
-| ♻️ Refactor      | [ ] |
-| 🛠️ Build/CI      | [ ] |
-| Other (explain) | [ ] |
+| Type             | Checked? |
+| ---------------- | -------- |
+| 🐞 Bug fix       | [ ]      |
+| ✨ New feature   | [ ]      |
+| 📝 Documentation | [ ]      |
+| ♻️ Refactor      | [ ]      |
+| 🛠️ Build/CI      | [ ]      |
+| Other (explain)  | [ ]      |
 
 ## 🧪 How to test
 

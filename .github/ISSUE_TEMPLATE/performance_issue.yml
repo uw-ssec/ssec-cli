@@ -7,7 +7,8 @@ body:
     id: description
     attributes:
       label: Describe the performance problem
-      description: Include metrics if possible (e.g., benchmark numbers, CPU usage).
+      description:
+        Include metrics if possible (e.g., benchmark numbers, CPU usage).
   - type: textarea
     id: reproduction
     attributes:
