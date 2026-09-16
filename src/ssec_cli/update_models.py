@@ -177,20 +177,49 @@ def _strip_jsonc(text: str) -> str:
         i += 1
 
     stripped = "".join(result)
-    # Strip trailing commas before } or ]
-    stripped = re.sub(r",\s*([}\]])", r"\1", stripped)
+    # Strip trailing commas before } or ], preserving any whitespace (including
+    # newlines) so that line numbers in the stripped text still line up with
+    # the original file for error reporting purposes.
+    stripped = re.sub(r",(\s*)([}\]])", r"\1\2", stripped)
     return stripped
 
 
+class SettingsError(Exception):
+    """Raised when settings.json cannot be read or parsed."""
+
+
 def read_settings(path: str) -> dict:
-    """Read VS Code settings.json, tolerating trailing commas and comments."""
-    with open(path, "r", encoding="utf-8") as f:
-        raw = f.read()
+    """Read VS Code settings.json, tolerating trailing commas and comments.
+
+    Raises:
+        SettingsError: If the file cannot be read, or contains invalid JSON.
+            The error message points to the offending line/column when possible.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except OSError as exc:
+        raise SettingsError(f"Could not read settings file at {path}: {exc}") from exc
 
     # Normalise Windows-style \r\n line endings to \n
     raw = raw.replace("\r\n", "\n").replace("\r", "\n")
 
-    return json.loads(_strip_jsonc(raw))
+    stripped = _strip_jsonc(raw)
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        lines = stripped.split("\n")
+        line_no = exc.lineno
+        col_no = exc.colno
+        offending_line = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
+        pointer = " " * max(col_no - 1, 0) + "^"
+        raise SettingsError(
+            f"Failed to parse {path} as JSON at line {line_no}, column {col_no}: {exc.msg}\n"
+            f"    {offending_line}\n"
+            f"    {pointer}\n"
+            "Please check the file for issues near this location (e.g. a missing "
+            "comma, an unmatched bracket, or a stray character) and try again."
+        ) from exc
 
 
 def write_settings(path: str, settings: dict) -> None:
@@ -253,7 +282,12 @@ def main() -> None:
         print(f"Error: Settings file not found at {settings_path}", file=sys.stderr)
         sys.exit(1)
 
-    settings = read_settings(settings_path)
+    try:
+        settings = read_settings(settings_path)
+    except SettingsError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     settings[SETTINGS_KEY] = models
     write_settings(settings_path, settings)
     print(f"\n✅ Updated {SETTINGS_KEY} in {settings_path}")
