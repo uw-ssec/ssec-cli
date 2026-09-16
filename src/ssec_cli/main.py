@@ -224,5 +224,22 @@ def onboard():
     )
 
 
+@app.command(help="Fetch LiteLLM models and update VS Code OAI Copilot extension settings")
+def update_models(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing to settings.json"),
+    settings: str = typer.Option(None, "--settings", help="Path to VS Code settings.json (defaults to OS-specific location)"),
+) -> None:
+    """Fetch available models from LiteLLM and auto-configure the OAI Copilot VS Code extension."""
+    from ssec_cli import update_models as _update_models
+
+    args = ["--dry-run"] if dry_run else []
+    if settings:
+        args += ["--settings", settings]
+
+    import sys as _sys
+    _sys.argv = [_sys.argv[0]] + args
+    _update_models.main()
+
+
 if __name__ == "__main__":
     app()
