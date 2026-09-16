@@ -15,6 +15,7 @@ app = typer.Typer(
     name="ssec-cli",
     help="A CLI tool built with typer",
     add_completion=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 # console = Console()
 
