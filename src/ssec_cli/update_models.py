@@ -32,14 +32,16 @@ def _default_settings_path() -> str:
 
 
 SETTINGS_PATH = _default_settings_path()
-SETTINGS_KEY = "oaicopilot.models"
+SETTINGS_MODELS_KEY = "oaicopilot.models"
+SETTINGS_BASE_URL_KEY = "oaicopilot.baseUrl"
 OWNER = "uw-ssec"
 SUFFIX = f"(UW SSEC)"
 
 
 def fetch_model_names(base_url: str, api_key: str) -> list[str]:
-    """Fetch model names from the LiteLLM /model/info endpoint."""
-    url = f"{base_url}/model/info"
+    """Fetch model names from the LiteLLM /v1/models endpoint."""
+    url = f"{base_url}/v1/models"
+    print(f"Fetching models from {url}…")
     req = urllib.request.Request(
         url,
         headers={
@@ -60,7 +62,7 @@ def fetch_model_names(base_url: str, api_key: str) -> list[str]:
 
     names: list[str] = []
     for entry in data.get("data", []):
-        name = entry.get("model_name")
+        name = entry.get("model_name", entry.get("id"))
         if name and name not in names:
             names.append(name)
     return sorted(names)
@@ -288,9 +290,10 @@ def main() -> None:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    settings[SETTINGS_KEY] = models
+    settings[SETTINGS_MODELS_KEY] = models
+    settings[SETTINGS_BASE_URL_KEY] = base_url
     write_settings(settings_path, settings)
-    print(f"\n✅ Updated {SETTINGS_KEY} in {settings_path}")
+    print(f"\n✅ Updated {SETTINGS_MODELS_KEY} and {SETTINGS_BASE_URL_KEY} in {settings_path}")
 
 
 if __name__ == "__main__":
