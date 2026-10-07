@@ -50,7 +50,7 @@ def fetch_models(base_url: str, api_key: str) -> list[dict]:
     ``None`` when the endpoint does not report one. Sorted by name.
     """
 
-    def get(url: str) -> dict | None:
+    def get(url: str) -> tuple[dict | None, int]:
         req = urllib.request.Request(
             url,
             headers={
@@ -61,21 +61,21 @@ def fetch_models(base_url: str, api_key: str) -> list[dict]:
         )
         try:
             with urllib.request.urlopen(req) as resp:
-                return json.loads(resp.read().decode())
+                return (json.loads(resp.read().decode()), resp.status)
         except urllib.error.HTTPError as exc:
             print(f"Error: HTTP {exc.code} from {url}", file=sys.stderr)
-            return None
+            return (None, exc.code)
         except urllib.error.URLError as exc:
             print(f"Error: Could not reach {url}: {exc.reason}", file=sys.stderr)
             sys.exit(1)
 
-    data = get(f"{base_url}/model/info")
-    if data is None:
+    data, status = get(f"{base_url}/model/info")
+    if data is None and status in (401, 403):
         print(
             "Falling back to default token limits. Ask an admin to add '/model/info' permissions to your LiteLLM key to allow fetching model specific values",
             file=sys.stderr,
         )
-        data = get(f"{base_url}/v1/models")
+        data, _ = get(f"{base_url}/v1/models")
     if data is None:
         sys.exit(1)
 
