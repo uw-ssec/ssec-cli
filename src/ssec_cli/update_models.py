@@ -41,32 +41,47 @@ DEFAULT_ANTHROPIC_MAX_TOKENS = 64000
 def fetch_models(base_url: str, api_key: str) -> list[dict]:
     """Fetch models from the LiteLLM /model/info endpoint.
 
+    Falls back to /v1/models when the key lacks access to /model/info. That
+    route lists ids without token limits, so both token values come back
+    ``None`` and the caller applies defaults.
+
     Returns a list of dicts with the model ``name``, its ``max_tokens`` (output
     budget) and its ``max_input_tokens`` (context window). Either token value is
     ``None`` when the endpoint does not report one. Sorted by name.
     """
-    url = f"{base_url}/model/info"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        print(f"Error: HTTP {exc.code} from {url}", file=sys.stderr)
-        sys.exit(1)
-    except urllib.error.URLError as exc:
-        print(f"Error: Could not reach {url}: {exc.reason}", file=sys.stderr)
+
+    def get(url: str) -> dict | None:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            print(f"Error: HTTP {exc.code} from {url}", file=sys.stderr)
+            return None
+        except urllib.error.URLError as exc:
+            print(f"Error: Could not reach {url}: {exc.reason}", file=sys.stderr)
+            sys.exit(1)
+
+    data = get(f"{base_url}/model/info")
+    if data is None:
+        print(
+            "Falling back to default token limits. Ask an admin to add '/model/info' permissions to your LiteLLM key to allow fetching model specific values",
+            file=sys.stderr,
+        )
+        data = get(f"{base_url}/v1/models")
+    if data is None:
         sys.exit(1)
 
     models: dict[str, dict] = {}
     for entry in data.get("data", []):
-        name = entry.get("model_name")
+        name = entry.get("model_name") or entry.get("id")
         if not name or name in models:
             continue
         model_info = entry.get("model_info") or {}
