@@ -35,10 +35,16 @@ SETTINGS_PATH = _default_settings_path()
 SETTINGS_KEY = "oaicopilot.models"
 OWNER = "uw-ssec"
 SUFFIX = f"(UW SSEC)"
+DEFAULT_ANTHROPIC_MAX_TOKENS = 64000
 
 
-def fetch_model_names(base_url: str, api_key: str) -> list[str]:
-    """Fetch model names from the LiteLLM /model/info endpoint."""
+def fetch_models(base_url: str, api_key: str) -> list[dict]:
+    """Fetch models from the LiteLLM /model/info endpoint.
+
+    Returns a list of dicts with the model ``name``, its ``max_tokens`` (output
+    budget) and its ``max_input_tokens`` (context window). Either token value is
+    ``None`` when the endpoint does not report one. Sorted by name.
+    """
     url = f"{base_url}/model/info"
     req = urllib.request.Request(
         url,
@@ -58,12 +64,19 @@ def fetch_model_names(base_url: str, api_key: str) -> list[str]:
         print(f"Error: Could not reach {url}: {exc.reason}", file=sys.stderr)
         sys.exit(1)
 
-    names: list[str] = []
+    models: dict[str, dict] = {}
     for entry in data.get("data", []):
         name = entry.get("model_name")
-        if name and name not in names:
-            names.append(name)
-    return sorted(names)
+        if not name or name in models:
+            continue
+        model_info = entry.get("model_info") or {}
+        max_tokens = model_info.get("max_tokens") or model_info.get("max_output_tokens")
+        models[name] = {
+            "name": name,
+            "max_tokens": max_tokens,
+            "max_input_tokens": model_info.get("max_input_tokens"),
+        }
+    return [models[name] for name in sorted(models)]
 
 
 def make_display_name(model_id: str) -> str:
@@ -137,13 +150,39 @@ def make_display_name(model_id: str) -> str:
     return f"{display} {SUFFIX}"
 
 
-def build_model_entry(model_id: str) -> dict:
-    return {
+def build_model_entry(
+    model_id: str,
+    max_tokens: int | None = None,
+    max_input_tokens: int | None = None,
+) -> dict:
+    entry = {
         "id": model_id,
         "displayName": make_display_name(model_id),
         "owned_by": OWNER,
         "isUserSelectable": True,
     }
+    if "claude" in model_id.lower():
+        entry["apiMode"] = "anthropic"
+        if max_tokens is None:
+            print(
+                f"Warning: no max_tokens reported for {model_id}; "
+                f"falling back to {DEFAULT_ANTHROPIC_MAX_TOKENS}.",
+                file=sys.stderr,
+            )
+        max_tokens = max_tokens or DEFAULT_ANTHROPIC_MAX_TOKENS
+        entry["max_tokens"] = max_tokens
+    else:
+        entry["apiMode"] = "openai-responses"
+        if max_tokens is not None:
+            entry["max_tokens"] = max_tokens
+
+    if max_input_tokens is not None:
+        # The extension derives its input budget as context_length - max_tokens,
+        # so context_length must cover the output budget on top of the context
+        # window LiteLLM reports. Without this the two values can cancel out and
+        # leave the model advertising a single usable input token.
+        entry["context_length"] = max_input_tokens + (max_tokens or 0)
+    return entry
 
 
 def _strip_jsonc(text: str) -> str:
@@ -260,17 +299,22 @@ def main() -> None:
             sys.exit(1)
 
     print("Fetching models from LiteLLM…")
-    model_names = fetch_model_names(base_url, api_key)
-    if not model_names:
+    fetched_models = fetch_models(base_url, api_key)
+    if not fetched_models:
         print("Warning: No models returned from the API.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Found {len(model_names)} model(s):")
+    print(f"Found {len(fetched_models)} model(s):")
     models = []
-    for name in model_names:
-        entry = build_model_entry(name)
+    for fetched in fetched_models:
+        entry = build_model_entry(
+            fetched["name"], fetched["max_tokens"], fetched["max_input_tokens"]
+        )
         models.append(entry)
-        print(f"  {entry['id']:30s} → {entry['displayName']}")
+        print(
+            f"  {entry['id']:30s} → {entry['displayName']} [{entry['apiMode']}] "
+            f"out={entry.get('max_tokens', '—')} ctx={entry.get('context_length', '—')}"
+        )
 
     if args.dry_run:
         print("\n--dry-run: No changes written.")
