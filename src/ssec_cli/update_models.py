@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import http
 import json
 import os
 import re
@@ -71,7 +72,7 @@ def fetch_models(base_url: str, api_key: str) -> list[dict]:
             sys.exit(1)
 
     data, status = get(f"{base_url}/model/info")
-    if data is None and status in (401, 403):
+    if data is None and status == http.HTTPStatus.FORBIDDEN:
         print(
             "Falling back to default token limits. Ask an admin to add '/model/info' permissions to your LiteLLM key to allow fetching model specific values",
             file=sys.stderr,
