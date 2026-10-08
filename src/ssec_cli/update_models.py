@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import http
 import json
 import os
 import re
@@ -32,7 +33,8 @@ def _default_settings_path() -> str:
 
 
 SETTINGS_PATH = _default_settings_path()
-SETTINGS_KEY = "oaicopilot.models"
+SETTINGS_MODELS_KEY = "oaicopilot.models"
+SETTINGS_BASE_URL_KEY = "oaicopilot.baseUrl"
 OWNER = "uw-ssec"
 SUFFIX = f"(UW SSEC)"
 DEFAULT_ANTHROPIC_MAX_TOKENS = 64000
@@ -70,7 +72,7 @@ def fetch_models(base_url: str, api_key: str) -> list[dict]:
             sys.exit(1)
 
     data, status = get(f"{base_url}/model/info")
-    if data is None and status in (401, 403):
+    if data is None and status == http.HTTPStatus.FORBIDDEN:
         print(
             "Falling back to default token limits. Ask an admin to add '/model/info' permissions to your LiteLLM key to allow fetching model specific values",
             file=sys.stderr,
@@ -347,9 +349,10 @@ def main() -> None:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    settings[SETTINGS_KEY] = models
+    settings[SETTINGS_MODELS_KEY] = models
+    settings[SETTINGS_BASE_URL_KEY] = base_url
     write_settings(settings_path, settings)
-    print(f"\n✅ Updated {SETTINGS_KEY} in {settings_path}")
+    print(f"\n✅ Updated {SETTINGS_MODELS_KEY} and {SETTINGS_BASE_URL_KEY} in {settings_path}")
 
 
 if __name__ == "__main__":
