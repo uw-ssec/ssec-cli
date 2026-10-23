@@ -32,6 +32,10 @@ class AgentConfig:
     When set, only these are archived. Used for agents whose path is a general
     data directory that also holds credentials, logs, or copies of project files."""
 
+    sqlite_redact_tables: tuple[str, ...] = ()
+    """Tables to empty in archived copies of this agent's SQLite databases, in
+    addition to ``writer.SQLITE_REDACT_TABLE_PATTERNS``."""
+
     def default_path(self) -> Path | None:
         """Return the default path for the current platform, or None if unsupported."""
         return self.default_paths.get(sys.platform)
@@ -100,6 +104,8 @@ ALL_AGENTS: list[AgentConfig] = [
         env_override="OPENCODE_DIR",
         # Leaves out auth.json, logs, and snapshot/ (git copies of project files).
         session_subpaths=("opencode.db", "storage", "tool-output"),
+        # opencode.db also holds share secrets and integration bindings.
+        sqlite_redact_tables=("session_share", "kv", "workspace"),
     ),
     AgentConfig(
         name="amp",
