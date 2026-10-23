@@ -1880,4 +1880,4 @@ packages:
   name: ssec-cli
   requires_dist:
   - typer>=0.9.0
-  requires_python: '>=3.8'
+  requires_python: '>=3.12'
