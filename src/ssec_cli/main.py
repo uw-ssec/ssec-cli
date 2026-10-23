@@ -11,12 +11,15 @@ from typing import Tuple
 import typer
 from rich import print
 
+from ssec_cli.tools.cli import tools_app
+
 app = typer.Typer(
     name="ssec-cli",
     help="A CLI tool built with typer",
     add_completion=True,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
+app.add_typer(tools_app, name="tools")
 # console = Console()
 
 
