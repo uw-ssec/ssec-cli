@@ -46,6 +46,7 @@ def test_classify(tmp_path, monkeypatch):
         ".local/share/pipx/venvs/black": EnvKind.PIPX,
         "proj/.pixi/envs/default": EnvKind.PIXI_PROJECT,
         ".pixi/envs/ruff": EnvKind.PIXI_GLOBAL,
+        "proj/.pixi/solve-group-envs/default-1a2b": EnvKind.PIXI_PROJECT,
         "miniforge3/envs/x": EnvKind.CONDA,
         ".pyenv/versions/3.12.1": EnvKind.PYENV,
         ".local/share/uv/python/cpython-3.12.1-macos-aarch64-none": EnvKind.UV_PYTHON,
@@ -335,3 +336,13 @@ def test_probe_usersite_lowest_wins(tmp_path, monkeypatch):
     )
     env = environments._probe_interpreter(exe, tmp_path / "home")
     assert env.packages == {"certifi": "2023.1.1"}
+
+
+def test_solve_group_env_is_pixi_project_with_project_set(tmp_path):
+    from ssec_cli.tools.environments import _build_env
+
+    p = tmp_path / "proj/.pixi/solve-group-envs/default-1a2b"
+    make_conda_env(p, {"pip": "25.0"})
+    e = _build_env(p, tmp_path)
+    assert e.kind == EnvKind.PIXI_PROJECT
+    assert e.project == tmp_path / "proj"

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -169,6 +170,45 @@ def test_old_python_cannot_have_new_pip():
     assert f["pip"].note == "pip 26.2.2 needs Python 3.10+; recreate this environment"
 
 
+def test_old_python_certifi_with_pip_is_not_fixable():
+    f = by_item(evaluate_env(env(EnvKind.PLAIN_VENV, py="3.9.18"), MINS))["certifi"]
+    assert (f.status, f.fix, f.note) == (
+        Status.OUTDATED,
+        None,
+        "pip 26.2.2 needs Python 3.10+; recreate this environment",
+    )
+
+
+def test_old_python_certifi_without_pip_uses_uv():
+    e = env(EnvKind.PLAIN_VENV, py="3.9.18", packages={"certifi": "2025.1.1"})
+    f = by_item(evaluate_env(e, MINS))["certifi"]
+    assert f.fix == 'uv pip install --python /e/venv/bin/python "certifi>=2026.10.19"'
+    assert f.note is None
+
+
+def test_unpinned_pip_advisory_gives_no_fix():
+    mins = dict(MINS)
+    mins["pip"] = replace(PIP, fix_url=None, fix_sha256=None)
+    f = by_item(evaluate_env(env(EnvKind.PLAIN_VENV), mins))["pip"]
+    assert (f.status, f.fix, f.note) == (
+        Status.OUTDATED,
+        None,
+        "advisory has no pinned pip URL",
+    )
+
+
+def test_pixi_solve_group_env_gets_pixi_fix():
+    e = env(
+        EnvKind.PIXI_PROJECT,
+        path="/p/.pixi/solve-group-envs/default-abc",
+        project=Path("/p"),
+        conda_packages={"pip"},
+    )
+    f = by_item(evaluate_env(e, MINS))["pip"]
+    assert f.fix == "cd /p && pixi update certifi ca-certificates pip"
+    assert f.note == "managed by pixi"
+
+
 def test_python_3_10_is_new_enough():
     assert by_item(evaluate_env(env(EnvKind.PLAIN_VENV, py="3.10.0"), MINS))["pip"].fix
 
@@ -181,12 +221,12 @@ def test_unknown_python_version_still_gives_pip_fix():
 
 def test_uv_project():
     f = by_item(evaluate_env(env(EnvKind.UV_PROJECT, project=Path("/p/my proj")), MINS))
+    note = "managed by uv; pip changes would be undone by uv sync"
     for item in ("pip", "certifi"):
-        assert (
-            f[item].fix
-            == "cd '/p/my proj' && uv lock --upgrade-package certifi && uv sync"
+        assert f[item].fix == (
+            f"cd '/p/my proj' && uv lock --upgrade-package {item} && uv sync"
         )
-        assert f[item].note == "managed by uv; pip changes would be undone by uv sync"
+        assert f[item].note == note
 
 
 @pytest.mark.parametrize(
@@ -230,10 +270,28 @@ def test_conda_installed_packages():
     assert f["pip"].fix == "conda update -n science pip" and f["pip"].note is None
 
 
-def test_conda_base_uses_dash_n_base():
-    e = env(EnvKind.CONDA, path="/c/miniconda3", conda_packages={"certifi"})
+def test_conda_base_with_conda_binary(tmp_path):
+    (tmp_path / "condabin").mkdir()
+    (tmp_path / "condabin" / "conda").touch()
+    e = env(EnvKind.CONDA, path=str(tmp_path), conda_packages={"certifi"})
     assert (
         by_item(evaluate_env(e, MINS))["certifi"].fix == "conda update -n base certifi"
+    )
+
+
+def test_conda_env_outside_envs_dir_uses_prefix():
+    e = env(EnvKind.CONDA, path="/c/miniconda3", conda_packages={"certifi"})
+    assert (
+        by_item(evaluate_env(e, MINS))["certifi"].fix
+        == "conda update -p /c/miniconda3 certifi"
+    )
+
+
+def test_conda_prefix_with_space_is_quoted():
+    e = env(EnvKind.CONDA, path="/c/my env", conda_packages={"certifi"})
+    assert (
+        by_item(evaluate_env(e, MINS))["certifi"].fix
+        == "conda update -p '/c/my env' certifi"
     )
 
 
@@ -315,7 +373,8 @@ def test_unparsable_version_is_unknown():
 @pytest.mark.parametrize(
     ("fname", "pkg", "fix", "note"),
     [
-        ("pixi.lock", "certifi", "cd /p && pixi update certifi ca-certificates", None),
+        ("pixi.lock", "certifi", "cd /p && pixi update certifi", None),
+        ("pixi.lock", "pip", "cd /p && pixi update pip", None),
         ("uv.lock", "certifi", "cd /p && uv lock --upgrade-package certifi", None),
         ("poetry.lock", "certifi", "cd /p && poetry update certifi", None),
         ("requirements.txt", "certifi", None, "edit the pin"),

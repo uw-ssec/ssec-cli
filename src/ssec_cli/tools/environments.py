@@ -93,6 +93,8 @@ def classify_env(path: Path, home: Path) -> EnvKind:
     parent, grand = path.parent, path.parent.parent
     if parent.name == "envs" and grand.name == ".pixi":
         return EnvKind.PIXI_GLOBAL if grand.parent == home else EnvKind.PIXI_PROJECT
+    if parent.name == "solve-group-envs" and grand.name == ".pixi":
+        return EnvKind.PIXI_PROJECT
     if parent.name == "tools" and grand.name == "uv":
         return EnvKind.UV_TOOL
     if parent.name == "venvs" and grand.name == "pipx":

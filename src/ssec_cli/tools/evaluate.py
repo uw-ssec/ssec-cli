@@ -31,6 +31,7 @@ from ssec_cli.tools.versions import is_below
 _PIP_KINDS = (EnvKind.PLAIN_VENV, EnvKind.FRAMEWORK, EnvKind.PYENV, EnvKind.UV_PYTHON)
 _CONDA_LIKE = (EnvKind.CONDA, EnvKind.PIXI_PROJECT, EnvKind.PIXI_GLOBAL)
 _PIP_MIN_PYTHON = (3, 10)
+_CONDA_BINS = ("condabin/conda", "bin/conda", "Scripts/conda.exe")
 
 
 class Status(str, Enum):
@@ -138,30 +139,34 @@ def _pip_commands(
 ) -> tuple[str | None, str | None]:
     """Fix and note for upgrading `pkg` with pip / uv pip in a plain env."""
     py = _q(python_executable(env))
+    mm = _py_mm(env.python_version)
+    old_python = mm is not None and mm < _PIP_MIN_PYTHON
+    pip_min = (pip_mn or mn).min_version
+    recreate = f"pip {pip_min} needs Python 3.10+; recreate this environment"
     if pkg == "pip":
-        url = (pip_mn or mn).fix_url
-        sha = (pip_mn or mn).fix_sha256
-        target = (
-            f'"pip @ {url}#sha256={sha}"'
-            if url and sha
-            else f'--upgrade "pip>={mn.min_version}"'
-        )
-        fix = f"{py} -m pip install {target}"
-        mm = _py_mm(env.python_version)
+        src = pip_mn or mn
+        if not (src.fix_url and src.fix_sha256):
+            return None, "advisory has no pinned pip URL"
+        fix = f'{py} -m pip install "pip @ {src.fix_url}#sha256={src.fix_sha256}"'
         if mm is None:
             return fix, (
-                "could not determine Python version; "
-                f"pip {mn.min_version} needs Python 3.10+"
+                f"could not determine Python version; pip {pip_min} needs Python 3.10+"
             )
-        if mm < _PIP_MIN_PYTHON:
-            return None, (
-                f"pip {mn.min_version} needs Python 3.10+; recreate this environment"
-            )
-        return fix, None
+        return (None, recreate) if old_python else (fix, None)
     req = f'"{pkg}>={mn.min_version}"'
     if env.packages is not None and "pip" in env.packages:
+        if old_python:
+            return None, recreate
         return f"{py} -m pip install --upgrade {req}", "upgrade pip first"
     return f"uv pip install --python {py} {req}", None
+
+
+def _conda_selector(path: Path) -> str:
+    if path.parent.name == "envs":
+        return f"-n {shlex.quote(path.name)}"
+    if any((path / rel).exists() for rel in _CONDA_BINS):
+        return "-n base"
+    return f"-p {_q(path)}"
 
 
 def _env_fix(
@@ -174,7 +179,7 @@ def _env_fix(
         if env.project is None:
             return None, "managed by uv; pip changes would be undone by uv sync"
         return (
-            f"cd {_q(env.project)} && uv lock --upgrade-package certifi && uv sync",
+            f"cd {_q(env.project)} && uv lock --upgrade-package {pkg} && uv sync",
             "managed by uv; pip changes would be undone by uv sync",
         )
     if kind in (EnvKind.UV_TOOL, EnvKind.PIPX):
@@ -195,8 +200,7 @@ def _env_fix(
         return f"pixi global update {shlex.quote(env.tool_name)}", None
     if kind is EnvKind.CONDA:
         if pkg in env.conda_packages:
-            sel = "base" if env.path.parent.name != "envs" else env.path.name
-            return f"conda update -n {shlex.quote(sel)} {pkg}", None
+            return f"conda update {_conda_selector(env.path)} {pkg}", None
         fix, note = _pip_commands(env, pkg, mn, mins.get("pip"))
         extra = "env mixes pip and conda packages"
         return fix, f"{note}; {extra}" if note else extra
@@ -284,7 +288,7 @@ def evaluate_lockpin(p: LockPin, mins: dict[str, PackageMinimum]) -> Finding:
     name = p.lockfile.name
     pkg = shlex.quote(p.package)
     if name == "pixi.lock":
-        fix, note = f"{cd}pixi update certifi ca-certificates", None
+        fix, note = f"{cd}pixi update {pkg}", None
     elif name == "uv.lock":
         fix, note = f"{cd}uv lock --upgrade-package {pkg}", None
     elif name == "poetry.lock":
