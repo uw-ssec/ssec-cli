@@ -13,9 +13,13 @@ urls = [
 package = "certifi"
 min_version = "2026.10.19"
 
+# Equals the certifi version because conda-forge builds ca-certificates from
+# certifi. Only the emSign G3 roots are affected; the unaffected emSign
+# G1/C1/C3 roots were restored on purpose (certifi 2026.10.19 onward).
+# See https://github.com/certifi/python-certifi/issues/439
 [[advisory.minimum]]
 package = "ca-certificates"
-min_version = "VERIFY"   # see Step 3
+min_version = "2026.10.19"
 
 [[advisory.minimum]]
 package = "pip"
