@@ -36,6 +36,8 @@ _PROBE = (
     "import sys,sysconfig,json;"
     "print(json.dumps({'prefix':sys.prefix,"
     "'purelib':sysconfig.get_paths()['purelib'],"
+    "'platlib':sysconfig.get_paths()['platlib'],"
+    "'usersite':__import__('site').getusersitepackages(),"
     "'stdlib':sysconfig.get_paths()['stdlib'],"
     "'version':'%d.%d.%d'%sys.version_info[:3]}))"
 )
@@ -99,23 +101,27 @@ def classify_env(path: Path, home: Path) -> EnvKind:
         return EnvKind.UV_PYTHON
     if ".pyenv" in path.parts and "versions" in path.parts:
         return EnvKind.PYENV
-    if _under(path, _HOMEBREW_PREFIXES):
-        return EnvKind.HOMEBREW
-    if "Python.framework" in path.parts:
-        return EnvKind.FRAMEWORK
     if (path / "conda-meta").is_dir():
         return EnvKind.CONDA
     if (path / "pyvenv.cfg").is_file():
         if "uv" in _cfg(path) and (parent / "uv.lock").is_file():
             return EnvKind.UV_PROJECT
         return EnvKind.PLAIN_VENV
+    if _under(path, _HOMEBREW_PREFIXES):
+        return EnvKind.HOMEBREW
+    if "Python.framework" in path.parts:
+        return EnvKind.FRAMEWORK
     if _under(path, _SYSTEM_PREFIXES):
         return EnvKind.SYSTEM
     return EnvKind.PLAIN_VENV
 
 
 def _site_dirs(path: Path) -> list[Path]:
-    dirs = [Path(p) for p in glob.glob(str(path / "lib" / "python*" / "site-packages"))]
+    dirs = []
+    for lib in ("lib", "lib64"):
+        dirs += [
+            Path(p) for p in glob.glob(str(path / lib / "python*" / "site-packages"))
+        ]
     win = path / "Lib" / "site-packages"
     if win.is_dir():
         dirs.append(win)
@@ -133,15 +139,12 @@ def _scan_site_dirs(dirs: Iterable[Path]) -> dict[str, str]:
     """Read name->version from dist-info/egg-info dir names.
 
     If a name shows up twice, keep the lower version so a stale copy is
-    never hidden behind a newer one.
+    never hidden behind a newer one. Raises OSError if a dir is unreadable.
     """
     found: dict[str, str] = {}
     for d in dirs:
-        try:
-            entries = os.listdir(d)
-        except OSError:
-            continue
-        for entry in entries:
+        # OSError propagates: an unreadable dir must not look like "empty".
+        for entry in os.listdir(d):
             stem, ext = os.path.splitext(entry)
             if ext not in (".dist-info", ".egg-info"):
                 continue
@@ -154,21 +157,30 @@ def _scan_site_dirs(dirs: Iterable[Path]) -> dict[str, str]:
     return found
 
 
+_WATCHED_PREFIXES = ("pip-", "certifi-", "ca-certificates-")
+
+
 def _read_conda_meta(path: Path) -> tuple[dict[str, str], str | None] | None:
+    """Return (name->version, python version), or None if there is no conda-meta.
+
+    Raises OSError/ValueError if conda-meta is unreadable or a file for a
+    watched package is corrupt; other corrupt entries are skipped.
+    """
     meta = path / "conda-meta"
-    try:
-        files = sorted(meta.glob("*.json"))
-    except OSError:
-        return None
     if not meta.is_dir():
         return None
     out: dict[str, str] = {}
     py: str | None = None
-    for f in files:
+    for entry in sorted(os.listdir(meta)):
+        if not entry.endswith(".json"):
+            continue
+        watched = entry.startswith(_WATCHED_PREFIXES)
         try:
-            data = json.loads(f.read_text())
+            data = json.loads((meta / entry).read_text())
             name, version = str(data["name"]), str(data["version"])
         except (OSError, ValueError, KeyError, TypeError):
+            if watched:
+                raise
             continue
         out[normalize_name(name)] = version
         if name == "python":
@@ -183,12 +195,15 @@ def read_env_packages(path: Path) -> tuple[dict[str, str] | None, set[str]]:
     environment is readable but empty. dist-info wins over conda-meta, since
     that is what Python imports (pip may have replaced a conda package).
     """
-    conda = _read_conda_meta(path)
-    sites = _site_dirs(path)
-    if conda is None and not sites:
+    try:
+        conda = _read_conda_meta(path)
+        sites = _site_dirs(path)
+        if conda is None and not sites:
+            return None, set()
+        packages = dict(conda[0]) if conda else {}
+        packages.update(_scan_site_dirs(sites))
+    except (OSError, ValueError):
         return None, set()
-    packages = dict(conda[0]) if conda else {}
-    packages.update(_scan_site_dirs(sites))
     return packages, set(conda[0]) if conda else set()
 
 
@@ -206,7 +221,10 @@ def _python_version(path: Path) -> str | None:
     for key in ("version", "version_info"):
         if key in cfg and (v := extract_version(cfg[key])):
             return v
-    conda = _read_conda_meta(path)
+    try:
+        conda = _read_conda_meta(path)
+    except (OSError, ValueError):
+        conda = None
     if conda and conda[1]:
         return conda[1]
     libs = sorted(glob.glob(str(path / "lib" / "python[0-9]*")))
@@ -320,10 +338,16 @@ def _probe_interpreter(exe: Path, home: Path) -> PythonEnv | None:
         return PythonEnv(base, classify_env(base, home), None, None)
     managed = (stdlib / "EXTERNALLY-MANAGED").exists()
     sites = [purelib]
+    for extra in (info.get("platlib"), info.get("usersite")):
+        if isinstance(extra, str) and Path(extra).is_dir():
+            sites.append(Path(extra))
     debian = prefix / "lib" / "python3" / "dist-packages"
     if debian.is_dir():
         sites.append(debian)
-    packages = _scan_site_dirs(sites) if purelib.is_dir() else None
+    try:
+        packages = _scan_site_dirs(sites) if purelib.is_dir() else None
+    except OSError:
+        packages = None
     if _under(prefix, _HOMEBREW_PREFIXES):
         kind = EnvKind.HOMEBREW
     elif managed or _under(prefix, _SYSTEM_PREFIXES):

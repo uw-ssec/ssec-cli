@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -32,7 +33,7 @@ def isolated(monkeypatch):
     monkeypatch.setattr(environments.subprocess, "run", boom)
 
 
-def test_classify(tmp_path):
+def test_classify(tmp_path, monkeypatch):
     home = tmp_path
     uvp = make_venv(home / "proj" / ".venv", uv=True)
     (home / "proj" / "uv.lock").write_text("")
@@ -62,6 +63,10 @@ def test_classify(tmp_path):
         "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12"
     )
     assert classify_env(brew, home) == EnvKind.HOMEBREW
+    cask = Path("/opt/homebrew/Caskroom/miniforge/base")
+    monkeypatch.setattr(Path, "is_dir", lambda self: self == cask / "conda-meta")
+    assert classify_env(cask, home) == EnvKind.CONDA
+    monkeypatch.undo()
     assert classify_env(Path("/usr"), home) == EnvKind.SYSTEM
 
 
@@ -267,3 +272,61 @@ def test_python_executable(tmp_path):
 
     assert python_executable(mk(posix)) == posix / "bin" / "python"
     assert python_executable(mk(win)) == win / "Scripts" / "python.exe"
+
+
+def test_unreadable_site_dir_is_none(tmp_path):
+    venv = make_venv(tmp_path / "v")
+    site = venv / "lib" / "python3.12" / "site-packages"
+    site.chmod(0)
+    try:
+        if os.access(site, os.R_OK):
+            pytest.skip("cannot make directory unreadable (root?)")
+        assert read_env_packages(venv)[0] is None
+    finally:
+        site.chmod(0o755)
+
+
+def test_corrupt_watched_conda_meta_is_none(tmp_path):
+    env = make_conda_env(tmp_path / "c", {"certifi": "2025.8.3"})
+    (env / "conda-meta" / "certifi-2025.8.3-h0_0.json").write_text("{not json")
+    assert read_env_packages(env)[0] is None
+
+
+def test_corrupt_unrelated_conda_meta_is_skipped(tmp_path):
+    env = make_conda_env(tmp_path / "c", {"certifi": "2025.8.3"})
+    (env / "conda-meta" / "numpy-1.0-h0_0.json").write_text("{not json")
+    pkgs, _ = read_env_packages(env)
+    assert pkgs is not None and pkgs["certifi"] == "2025.8.3"
+
+
+def test_lib64_site_packages(tmp_path):
+    venv = make_venv(tmp_path / "v", pkgs={})
+    site64 = venv / "lib64" / "python3.12" / "site-packages"
+    (site64 / "certifi-2024.1.1.dist-info").mkdir(parents=True)
+    assert read_env_packages(venv)[0] == {"certifi": "2024.1.1"}
+
+
+def test_probe_usersite_lowest_wins(tmp_path, monkeypatch):
+    prefix = tmp_path / "py"
+    purelib = prefix / "lib" / "python3.12" / "site-packages"
+    user = tmp_path / "usersite"
+    (purelib / "certifi-2025.8.3.dist-info").mkdir(parents=True)
+    (user / "certifi-2023.1.1.dist-info").mkdir(parents=True)
+    exe = prefix / "bin" / "python3"
+    exe.parent.mkdir()
+    exe.write_text("")
+    info = {
+        "prefix": str(prefix),
+        "purelib": str(purelib),
+        "platlib": str(purelib),
+        "usersite": str(user),
+        "stdlib": str(prefix / "lib" / "python3.12"),
+        "version": "3.12.4",
+    }
+    monkeypatch.setattr(
+        environments.subprocess,
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, json.dumps(info), ""),
+    )
+    env = environments._probe_interpreter(exe, tmp_path / "home")
+    assert env.packages == {"certifi": "2023.1.1"}
