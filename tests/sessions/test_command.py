@@ -56,25 +56,48 @@ def test_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert list(tmp_path.glob("*.zip")) == []
 
 
-def test_agents_filter(tmp_path: Path) -> None:
+def test_agents_and_project_filters(tmp_path: Path) -> None:
     result = runner.invoke(
-        app, ["archive-sessions", "--agents", "codex", "--username", "octocat"]
+        app,
+        [
+            "archive-sessions",
+            "--agents",
+            "codex",
+            "--project",
+            "alpha",
+            "--username",
+            "octocat",
+        ],
     )
     assert result.exit_code == 0, result.output
 
     with zipfile.ZipFile(_zip_in(tmp_path)) as zf:
         names = [n for n in zf.namelist() if n != "manifest.json"]
         manifest = json.loads(zf.read("manifest.json"))
-    assert names == [
-        "codex/2026/10/23/rollout-a.jsonl",
-        "codex/2026/10/23/rollout-b.jsonl",
-    ]
+    assert names == ["codex/2026/10/23/rollout-a.jsonl"]
     assert manifest["filters"] == {
         "agents": ["codex"],
         "since": None,
         "until": None,
+        "project": "alpha",
         "jsonl_only": False,
     }
+
+
+def test_project_skips_unsupported_agents() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "archive-sessions",
+            "--agents",
+            "cursor,codex",
+            "--project",
+            "alpha",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Skipping Cursor: --project is not supported" in result.output
 
 
 def test_output_directory(tmp_path: Path) -> None:
@@ -107,7 +130,7 @@ def test_bad_date() -> None:
 
 
 def test_nothing_matched(tmp_path: Path) -> None:
-    result = runner.invoke(app, ["archive-sessions", "--since", "2999-01-01"])
+    result = runner.invoke(app, ["archive-sessions", "--project", "no-such-project"])
     assert result.exit_code == 0, result.output
     assert "No agent session files matched" in result.output
     assert list(tmp_path.glob("*.zip")) == []
@@ -118,3 +141,11 @@ def test_output_directory_is_created(tmp_path: Path) -> None:
     result = runner.invoke(app, ["archive-sessions", "--output", str(out_dir)])
     assert result.exit_code == 0, result.output
     _zip_in(out_dir)
+
+
+def test_project_records_searched_agents(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["archive-sessions", "--project", "alpha"])
+    assert result.exit_code == 0, result.output
+    with zipfile.ZipFile(_zip_in(tmp_path)) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+    assert manifest["filters"]["agents"] == ["claude-code", "codex"]
