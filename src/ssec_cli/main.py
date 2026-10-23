@@ -11,6 +11,8 @@ from typing import Tuple
 import typer
 from rich import print
 
+from ssec_cli.sessions.command import archive_sessions
+
 app = typer.Typer(
     name="ssec-cli",
     help="A CLI tool built with typer",
@@ -240,6 +242,11 @@ def update_models(
     import sys as _sys
     _sys.argv = [_sys.argv[0]] + args
     _update_models.main()
+
+
+app.command(name="archive-sessions", help="Archive AI agent session transcripts to a local zip file")(
+    archive_sessions
+)
 
 
 if __name__ == "__main__":
