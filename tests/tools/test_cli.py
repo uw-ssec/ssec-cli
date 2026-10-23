@@ -193,3 +193,91 @@ def test_display_path():
     assert report.display_path(HOME, HOME) == "~"
     assert report.display_path(Path("/etc/x"), HOME) == "/etc/x"
     assert report.display_path(None, HOME) == ""
+
+
+def test_multiline_rows_separated_and_unbroken():
+    fs = []
+    for env in ("e10", "e11"):
+        fs.append(
+            _f(
+                "environment",
+                "pip",
+                Status.OUTDATED,
+                location=HOME / env,
+                current="24.0",
+                minimum="26.2.2",
+                fix="fixpip " + env,
+                note="shared note",
+                env_kind=EnvKind.PLAIN_VENV,
+            )
+        )
+        fs.append(
+            _f(
+                "environment",
+                "certifi",
+                Status.OUTDATED,
+                location=HOME / env,
+                current="2026.5.20",
+                minimum="2026.10.19",
+                fix="fixcert " + env,
+                note="shared note",
+                env_kind=EnvKind.PLAIN_VENV,
+            )
+        )
+    con = Console(width=120, record=True, force_terminal=False)
+    report.render(ScanResult(fs, [_adv()], True), con, HOME)
+    text = con.export_text()
+    assert text.count("pip 24.0 → 26.2.2") == 2
+    assert text.count("certifi 2026.5.20 → 2026.10.19") == 2
+    lines = text.splitlines()
+    first = next(i for i, l in enumerate(lines) if "~/e10" in l)
+    second = next(i for i, l in enumerate(lines) if "~/e11" in l)
+    assert any(l.startswith("├") for l in lines[first:second])
+
+
+def test_fix_cell_refs_before_notes():
+    fs = [
+        _f(
+            "environment",
+            "pip",
+            Status.OUTDATED,
+            location=HOME / "e",
+            fix="cmd-a",
+            note="managed by uv",
+            env_kind=EnvKind.UV_PROJECT,
+        ),
+        _f(
+            "environment",
+            "certifi",
+            Status.OUTDATED,
+            location=HOME / "e",
+            fix="cmd-b",
+            note="managed by uv",
+            env_kind=EnvKind.UV_PROJECT,
+        ),
+    ]
+    con = Console(width=120, record=True, force_terminal=False)
+    report.render(ScanResult(fs, [_adv()], True), con, HOME)
+    text = con.export_text()
+    assert "[1] [2]" in text
+    assert text.count("managed by uv") == 1
+
+
+def test_homebrew_formula_shown_and_in_json(monkeypatch):
+    r = _result(
+        [
+            _f(
+                "tool",
+                "gh",
+                Status.OK,
+                location=Path("/x/gh"),
+                current="1",
+                install_method=InstallMethod.HOMEBREW,
+                formula="gh",
+            )
+        ]
+    )
+    _patch(monkeypatch, r)
+    assert "homebrew (gh)" in runner.invoke(app, ["tools", "check"]).output
+    data = json.loads(runner.invoke(app, ["tools", "check", "--json"]).output)
+    assert any(x["formula"] == "gh" for x in data["findings"])

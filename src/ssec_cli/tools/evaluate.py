@@ -55,6 +55,7 @@ class Finding:
     note: str | None = None
     env_kind: EnvKind | None = None
     install_method: InstallMethod | None = None
+    formula: str | None = None
 
 
 @dataclass
@@ -113,6 +114,7 @@ def evaluate_tool(t: ToolInfo, mins: dict[str, PackageMinimum]) -> Finding:
         "minimum": mn.min_version if mn else None,
         "advisory_id": mn.advisory_id if mn else None,
         "install_method": t.method,
+        "formula": t.formula,
     }
     if t.path is None:
         return Finding(

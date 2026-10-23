@@ -90,6 +90,7 @@ def test_tool_outdated_rows(name, method, formula, fix, note):
     assert (f.status, f.fix, f.note) == (Status.OUTDATED, fix, note)
     assert f.category == "tool" and f.install_method is method
     assert f.advisory_id == MINS[name].advisory_id
+    assert f.formula == formula
 
 
 def test_tool_ok():

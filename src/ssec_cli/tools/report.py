@@ -59,6 +59,7 @@ def to_json(result: ScanResult, home: Path) -> str:
                 "note": f.note,
                 "env_kind": f.env_kind.value if f.env_kind else None,
                 "install_method": f.install_method.value if f.install_method else None,
+                "formula": f.formula,
             }
         )
     advisories = [
@@ -82,16 +83,17 @@ class _Fixes:
 
 
 def _fix_cell(findings: list[Finding], fixes: _Fixes, used: dict[int, str]) -> Text:
-    parts: list[str] = []
+    refs: list[str] = []
+    notes: list[str] = []
     for f in findings:
         if f.fix:
             n = fixes.ref(f.fix)
             used[n] = f.fix
-            if f"[{n}]" not in parts:
-                parts.append(f"[{n}]")
-        if f.note and f.status is not Status.OK and f.note not in parts:
-            parts.append(f.note)
-    return Text(" ".join(parts))
+            if f"[{n}]" not in refs:
+                refs.append(f"[{n}]")
+        if f.note and f.status is not Status.OK and f.note not in notes:
+            notes.append(f.note)
+    return Text("\n".join(filter(None, [" ".join(refs), "; ".join(notes)])))
 
 
 def _print_fixes(console: Console, used: dict[int, str]) -> None:
@@ -134,8 +136,8 @@ def _grouped_table(
         else:
             quiet += 1
     flagged.sort(key=lambda g: min(_RANK[f.status] for f in g[1]))
-    table = Table(title=title, title_justify="left")
-    table.add_column("Item")
+    table = Table(title=title, title_justify="left", show_lines=True)
+    table.add_column("Item", no_wrap=True)
     table.add_column("Location", overflow="fold")
     if category == "environment":
         table.add_column("Kind")
@@ -160,6 +162,13 @@ def _grouped_table(
     console.print()
 
 
+def _installed_via(f: Finding) -> str:
+    if not f.install_method:
+        return ""
+    via = f.install_method.value
+    return f"{via} ({f.formula})" if f.formula else via
+
+
 def _tools_table(
     findings: list[Finding], console: Console, home: Path, fixes: _Fixes
 ) -> None:
@@ -177,7 +186,7 @@ def _tools_table(
         table.add_row(
             Text(f.item),
             Text(display_path(f.location, home)),
-            Text(f.install_method.value if f.install_method else ""),
+            Text(_installed_via(f)),
             Text(f.current or ""),
             Text(f.minimum or ""),
             _status_text(f.status),
