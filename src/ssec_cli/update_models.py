@@ -41,9 +41,9 @@ DEFAULT_ANTHROPIC_MAX_TOKENS = 64000
 
 
 def fetch_models(base_url: str, api_key: str) -> list[dict]:
-    """Fetch models from the LiteLLM /model/info endpoint.
+    """Fetch models from the LiteLLM /v2/model/info endpoint.
 
-    Falls back to /v1/models when the key lacks access to /model/info. That
+    Falls back to /v1/models when the key lacks access to /v2/model/info. That
     route lists ids without token limits, so both token values come back
     ``None`` and the caller applies defaults.
 
@@ -71,10 +71,10 @@ def fetch_models(base_url: str, api_key: str) -> list[dict]:
             print(f"Error: Could not reach {url}: {exc.reason}", file=sys.stderr)
             sys.exit(1)
 
-    data, status = get(f"{base_url}/model/info")
+    data, status = get(f"{base_url}/v2/model/info")
     if data is None and status == http.HTTPStatus.FORBIDDEN:
         print(
-            "Falling back to default token limits. Ask an admin to add '/model/info' permissions to your LiteLLM key to allow fetching model specific values",
+            "Falling back to default token limits. Ask an admin to add '/v2/model/info' permissions to your LiteLLM key to allow fetching model specific values",
             file=sys.stderr,
         )
         data, _ = get(f"{base_url}/v1/models")
