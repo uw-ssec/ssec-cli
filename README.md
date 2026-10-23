@@ -40,8 +40,8 @@ and a `manifest.json` describing what's inside.
 # See what would be archived
 ssec archive-sessions --dry-run
 
-# Archive sessions from this month
-ssec archive-sessions --since 2026-10-01
+# Archive one project's Claude Code and Codex sessions from the last month
+ssec archive-sessions --project . --since 2026-10-01
 
 # Only Codex transcripts, written to a chosen file
 ssec archive-sessions --agents codex --jsonl-only --output codex.zip

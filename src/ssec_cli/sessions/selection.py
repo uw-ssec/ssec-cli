@@ -10,6 +10,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from ssec_cli.sessions.agents import AgentConfig
+from ssec_cli.sessions.projects import (
+    ProjectMatcher,
+    claude_project_dirs,
+    codex_session_matches,
+)
 
 EXCLUDED_FILE_PATTERNS = (
     "auth.json",
@@ -158,10 +163,12 @@ def select_files(
     *,
     window: TimeWindow | None = None,
     jsonl_only: bool = False,
+    project: ProjectMatcher | None = None,
 ) -> AgentSelection:
     """Choose the files to archive from one agent's session directory.
 
-    With a time window, a session is kept whole if any of its files were
+    *project* must be ``None`` for agents not in ``PROJECT_AGENTS``. With a
+    time window, a session is kept whole if any of its files were
     modified in the window. SQLite WAL and shared-memory files are left out;
     the archive writer copies their content into a snapshot of the database.
     """
@@ -169,8 +176,21 @@ def select_files(
     selection = AgentSelection(agent=agent, root=root)
     errors = selection.unreadable_dirs
 
-    tops = [root / sub for sub in agent.session_subpaths] or [root]
-    candidates = (f for top in tops if top.exists() for f in walk_files(top, errors))
+    if project is None:
+        tops = [root / sub for sub in agent.session_subpaths] or [root]
+        candidates: Iterator[Path] = (
+            f for top in tops if top.exists() for f in walk_files(top, errors)
+        )
+    elif agent.name == "claude-code":
+        candidates = (
+            f for d in claude_project_dirs(root, project) for f in walk_files(d, errors)
+        )
+    elif agent.name == "codex":
+        candidates = (
+            f for f in walk_files(root, errors) if codex_session_matches(f, project)
+        )
+    else:
+        raise ValueError(f"--project is not supported for {agent.display_name}")
 
     sessions: dict[object, list[tuple[Path, int]]] = {}
     in_window: set[object] = set()

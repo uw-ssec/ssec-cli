@@ -14,6 +14,7 @@ from ssec_cli import __version__
 from ssec_cli.sessions.agents import ALL_AGENTS, AgentConfig
 from ssec_cli.sessions.discovery import discover_agents
 from ssec_cli.sessions.github_user import resolve_github_username
+from ssec_cli.sessions.projects import PROJECT_AGENTS, ProjectMatcher
 from ssec_cli.sessions.selection import (
     AgentSelection,
     TimeWindow,
@@ -105,6 +106,14 @@ def archive_sessions(
         "--until",
         help="Only files modified on or before this date (YYYY-MM-DD) or date-time",
     ),
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        help=(
+            "Only sessions from this project: a path (e.g. '.') or a directory name. "
+            f"Supported for {', '.join(sorted(PROJECT_AGENTS))}; other agents are skipped."
+        ),
+    ),
     jsonl_only: bool = typer.Option(
         False, "--jsonl-only", help="Only include *.jsonl files"
     ),
@@ -132,6 +141,21 @@ def archive_sessions(
         start=_parse_bound(since, end=False, option="--since"),
         end=_parse_bound(until, end=True, option="--until"),
     )
+    matcher = ProjectMatcher.parse(project) if project else None
+
+    if matcher is not None:
+        unsupported = [
+            a.display_name for a in agent_list if a.name not in PROJECT_AGENTS
+        ]
+        if agents and unsupported:
+            console.print(
+                f"Skipping {', '.join(unsupported)}: --project is not supported for these agents"
+            )
+        elif unsupported:
+            console.print(
+                f"--project only searches {', '.join(sorted(PROJECT_AGENTS))} sessions"
+            )
+        agent_list = [a for a in agent_list if a.name in PROJECT_AGENTS]
 
     discovered, skipped = discover_agents(agent_list)
     for notice in skipped:
@@ -143,6 +167,7 @@ def archive_sessions(
             d.path,
             window=window,
             jsonl_only=jsonl_only,
+            project=matcher,
         )
         for d in discovered
     ]
@@ -188,6 +213,7 @@ def archive_sessions(
             "agents": [a.name for a in agent_list],
             "since": since,
             "until": until,
+            "project": project,
             "jsonl_only": jsonl_only,
         },
     )
