@@ -68,3 +68,22 @@ def claude_root(tmp_path: Path) -> Path:
         root / "-work-beta" / "s2.jsonl", [{"type": "user", "cwd": "/work/beta"}]
     )
     return root
+
+
+@pytest.fixture()
+def codex_root(tmp_path: Path) -> Path:
+    """A Codex sessions directory with one rollout each for ``/work/alpha`` and ``/work/beta``."""
+    root = tmp_path / "codex-sessions"
+    day = root / "2026" / "10" / "23"
+    write_jsonl(
+        day / "rollout-a.jsonl",
+        [
+            {"type": "session_meta", "payload": {"cwd": "/work/alpha"}},
+            {"type": "event"},
+        ],
+    )
+    write_jsonl(
+        day / "rollout-b.jsonl",
+        [{"type": "session_meta", "payload": {"cwd": "/work/beta"}}],
+    )
+    return root

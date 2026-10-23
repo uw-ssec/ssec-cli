@@ -80,6 +80,20 @@ class AgentSelection:
     total_bytes: int = 0
     excluded_credentials: int = 0
     unreadable_dirs: list[Path] = field(default_factory=list)
+    redacted_tables: dict[str, list[str]] = field(default_factory=dict)
+    """Emptied SQLite tables, keyed by the database's path relative to *root*."""
+
+    def manifest_entry(self) -> dict:
+        entry: dict = {
+            "name": self.agent.name,
+            "display_name": self.agent.display_name,
+            "source_path": str(self.root),
+            "file_count": len(self.files),
+            "total_bytes": self.total_bytes,
+        }
+        if self.redacted_tables:
+            entry["redacted_sqlite_tables"] = self.redacted_tables
+        return entry
 
 
 def is_credential_file(path: Path) -> bool:
