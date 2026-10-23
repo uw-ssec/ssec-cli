@@ -1,0 +1,16 @@
+version: 5
+packages:
+- kind: conda
+  name: certifi
+  version: 2025.8.3
+  build: pyhd8ed1ab_0
+  url: https://conda.anaconda.org/conda-forge/noarch/certifi-2025.8.3-pyhd8ed1ab_0.conda
+- kind: conda
+  name: ripgrep
+  version: 15.2.0
+  build: hf19af3b_1
+  url: https://conda.anaconda.org/conda-forge/linux-64/ripgrep-15.2.0-hf19af3b_1.conda
+- kind: pypi
+  name: pip
+  version: '24.0'
+  url: https://files.pythonhosted.org/packages/aa/pip-24.0-py3-none-any.whl

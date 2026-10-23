@@ -67,3 +67,35 @@ def test_unreadable_file_is_error(tmp_path):
     (tmp_path / "uv.lock").write_bytes(b"\xff\xfe\x00bad")
     pins = parse_lockfile(tmp_path / "uv.lock")
     assert len(pins) == 1 and pins[0].error
+
+
+def test_legacy_pixi_lock(tmp_path):
+    shutil.copy(DATA / "pixi_legacy.lock", tmp_path / "pixi.lock")
+    pins = parse_lockfile(tmp_path / "pixi.lock")
+    assert _pairs(pins) == {("certifi", "2025.8.3"), ("pip", "24.0")}
+    assert all(p.error is None for p in pins)
+
+
+def test_empty_pixi_lock_is_unrecognised(tmp_path):
+    f = tmp_path / "pixi.lock"
+    f.write_text("version: 6\npackages:\n")
+    pins = parse_lockfile(f)
+    assert len(pins) == 1
+    assert pins[0].error == "unrecognised pixi.lock format"
+    assert pins[0].package == ""
+
+
+def test_pixi_lock_without_watched_packages_is_empty(tmp_path):
+    f = tmp_path / "pixi.lock"
+    f.write_text(
+        "      - conda: https://c.org/linux-64/ripgrep-15.2.0-hf19af3b_1.conda\n"
+    )
+    assert parse_lockfile(f) == []
+
+
+def test_requirements_with_bom(tmp_path):
+    f = tmp_path / "requirements.txt"
+    f.write_bytes(b"\xef\xbb\xbfcertifi==2025.8.3\n")
+    assert [(p.package, p.version) for p in parse_lockfile(f)] == [
+        ("certifi", "2025.8.3")
+    ]

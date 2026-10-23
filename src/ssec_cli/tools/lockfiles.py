@@ -20,6 +20,8 @@ LOCKFILE_PATTERNS = ("pixi.lock", "uv.lock", "poetry.lock", "requirements*.txt")
 LOCK_EXCLUDES = (*DEFAULT_EXCLUDES, ".pixi", ".venv", "venv")
 
 _PIXI_LINE = re.compile(r"^\s*-\s*(conda|pypi):\s*(\S+)\s*$")
+_LEGACY_KIND = re.compile(r"^\s*-\s*kind:\s*(conda|pypi)\s*$")
+_LEGACY_FIELD = re.compile(r"^\s+(name|version):\s*(\S+)\s*$")
 _CONDA_FILE = re.compile(r"^(?P<name>.+)-(?P<ver>[^-]+)-[^-]+\.(conda|tar\.bz2)$")
 _PYPI_FILE = re.compile(r"^(?P<name>[^-]+)-(?P<ver>[^-]+)(-.*\.whl|\.tar\.gz|\.zip)$")
 _REQ_LINE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*===?\s*([^\s;#\\]+)")
@@ -47,6 +49,23 @@ def _pixi_pins(text: str) -> set[tuple[str, str]]:
     return found
 
 
+def _pixi_legacy_pins(text: str) -> set[tuple[str, str]]:
+    """Pins from legacy (v3-v5) `- kind: conda|pypi` blocks."""
+    found: set[tuple[str, str]] = set()
+    fields: dict[str, str] | None = None
+    for line in text.splitlines():
+        if _LEGACY_KIND.match(line):
+            fields = {}
+            continue
+        m = _LEGACY_FIELD.match(line)
+        if fields is not None and m:
+            fields[m[1]] = m[2].strip("\"'")
+            if len(fields) == 2:
+                found.add((normalize_name(fields["name"]), fields["version"]))
+                fields = None
+    return found
+
+
 def _toml_pins(text: str) -> set[tuple[str, str]]:
     found: set[tuple[str, str]] = set()
     for pkg in tomllib.loads(text).get("package", []):
@@ -68,9 +87,11 @@ def _requirements_pins(text: str) -> set[tuple[str, str]]:
 def parse_lockfile(path: Path, packages: Sequence[str] = WATCHED) -> list[LockPin]:
     """One pin per distinct (package, version); one error pin if unparsable."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
         if path.name == "pixi.lock":
-            found = _pixi_pins(text)
+            found = _pixi_pins(text) | _pixi_legacy_pins(text)
+            if not found:
+                return [LockPin(path, "", None, "unrecognised pixi.lock format")]
         elif path.suffix == ".lock":
             found = _toml_pins(text)
         else:
