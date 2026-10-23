@@ -1,0 +1,40 @@
+schema_version = 1
+
+[[advisory]]
+id = "2026-10-emudhra-emsign"
+title = "eMudhra / emSign CA private keys compromised; emSign root removed from CA bundles"
+date = "2026-10-20"
+urls = [
+  "https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576",
+  "https://github.com/pypa/pip/issues/14374",
+]
+
+[[advisory.minimum]]
+package = "certifi"
+min_version = "2026.10.19"
+
+[[advisory.minimum]]
+package = "ca-certificates"
+min_version = "VERIFY"   # see Step 3
+
+[[advisory.minimum]]
+package = "pip"
+min_version = "26.2.2"
+fix_url = "https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl"
+fix_sha256 = "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+
+[[advisory.minimum]]
+package = "uv"
+min_version = "0.13.4"
+
+[[advisory.minimum]]
+package = "sigstore"
+min_version = "4.5.1"
+
+[[advisory.minimum]]
+package = "conda"
+min_version = "26.9.4"
+
+[[advisory.minimum]]
+package = "pixi"
+min_version = "0.82.1"
