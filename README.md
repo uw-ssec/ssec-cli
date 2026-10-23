@@ -29,6 +29,30 @@ pip install -e .
 ssec --help
 ```
 
+### Archiving agent sessions
+
+`ssec archive-sessions` finds the session transcripts that AI coding agents
+(Claude Code, Codex, Copilot CLI, Cursor, Gemini CLI, and 13 others) keep on
+your machine and writes them to a single zip file, with one directory per agent
+and a `manifest.json` describing what's inside.
+
+```bash
+# See what would be archived
+ssec archive-sessions --dry-run
+
+# Archive one project's Claude Code and Codex sessions from the last month
+ssec archive-sessions --project . --since 2026-10-01
+
+# Only Codex transcripts, written to a chosen file
+ssec archive-sessions --agents codex --jsonl-only --output codex.zip
+```
+
+Each agent's session directory can be overridden with an environment variable,
+such as `CLAUDE_PROJECTS_DIR` or `CODEX_SESSIONS_DIR`. Known credential files
+(for example `auth.json` and `oauth_creds.json`) are always left out, but
+transcripts themselves can still contain secrets, tokens, and personal
+information. Review an archive before you share it.
+
 ## Development
 
 This project uses pixi for dependency management:
