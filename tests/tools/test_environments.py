@@ -1,0 +1,269 @@
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from ssec_cli.tools import environments
+from ssec_cli.tools.environments import (
+    EnvKind,
+    PythonEnv,
+    classify_env,
+    discover_environments,
+    python_executable,
+    read_env_packages,
+)
+
+from conftest import make_conda_env, make_framework, make_venv
+
+
+REAL_KNOWN_PLACES = environments._known_places
+
+
+@pytest.fixture(autouse=True)
+def isolated(monkeypatch):
+    """Never touch the real machine: no known places, no PATH, no conda."""
+    monkeypatch.setattr(environments, "_known_places", lambda home: [])
+    monkeypatch.setattr(environments.shutil, "which", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise AssertionError(f"unexpected subprocess: {a}")
+
+    monkeypatch.setattr(environments.subprocess, "run", boom)
+
+
+def test_classify(tmp_path):
+    home = tmp_path
+    uvp = make_venv(home / "proj" / ".venv", uv=True)
+    (home / "proj" / "uv.lock").write_text("")
+    assert classify_env(uvp, home) == EnvKind.UV_PROJECT
+    plain = make_venv(home / "other" / ".venv", uv=True)
+    assert classify_env(plain, home) == EnvKind.PLAIN_VENV
+    cases = {
+        ".local/share/uv/tools/ruff": EnvKind.UV_TOOL,
+        ".local/pipx/venvs/black": EnvKind.PIPX,
+        ".local/share/pipx/venvs/black": EnvKind.PIPX,
+        "proj/.pixi/envs/default": EnvKind.PIXI_PROJECT,
+        ".pixi/envs/ruff": EnvKind.PIXI_GLOBAL,
+        "miniforge3/envs/x": EnvKind.CONDA,
+        ".pyenv/versions/3.12.1": EnvKind.PYENV,
+        ".local/share/uv/python/cpython-3.12.1-macos-aarch64-none": EnvKind.UV_PYTHON,
+    }
+    for rel, kind in cases.items():
+        p = home / rel
+        if kind == EnvKind.CONDA:
+            make_conda_env(p, {})
+        else:
+            p.mkdir(parents=True)
+        assert classify_env(p, home) == kind, rel
+    fw = Path("/Library/Frameworks/Python.framework/Versions/3.12")
+    assert classify_env(fw, home) == EnvKind.FRAMEWORK
+    brew = Path(
+        "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12"
+    )
+    assert classify_env(brew, home) == EnvKind.HOMEBREW
+    assert classify_env(Path("/usr"), home) == EnvKind.SYSTEM
+
+
+def test_read_packages_venv(tmp_path):
+    venv = make_venv(tmp_path / "v", pkgs={"pip": "24.0", "Typing_Extensions": "4.1"})
+    pkgs, conda = read_env_packages(venv)
+    assert pkgs == {"pip": "24.0", "typing-extensions": "4.1"}
+    assert conda == set()
+
+
+def test_read_packages_windows_layout(tmp_path):
+    venv = make_venv(tmp_path / "v", windows=True)
+    pkgs, _ = read_env_packages(venv)
+    assert pkgs == {"pip": "24.0", "certifi": "2025.8.3"}
+
+
+def test_packages_none_vs_empty(tmp_path):
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    (bare / "pyvenv.cfg").write_text("version = 3.12.1\n")
+    assert read_env_packages(bare)[0] is None
+    empty = make_venv(tmp_path / "empty", pkgs={})
+    assert read_env_packages(empty)[0] == {}
+    env = discover_environments(tmp_path, include_path_interpreters=False)
+    by_name = {e.path.name: e for e in env}
+    assert by_name["bare"].packages is None
+    assert by_name["empty"].packages == {}
+
+
+def test_conda_env_tracks_conda_vs_pip(tmp_path):
+    env = make_conda_env(
+        tmp_path / "c",
+        {"certifi": "2025.8.3", "ca-certificates": "2025.9.9"},
+        pip_pkgs={"pip": "24.0"},
+    )
+    pkgs, conda = read_env_packages(env)
+    assert pkgs["certifi"] == "2025.8.3"
+    assert pkgs["ca-certificates"] == "2025.9.9"
+    assert pkgs["pip"] == "24.0"
+    assert "certifi" in conda and "pip" not in conda
+
+
+def test_pip_dist_info_overrides_stale_conda_meta(tmp_path):
+    env = make_conda_env(tmp_path / "c", {"pip": "23.0"}, pip_pkgs={"pip": "24.0"})
+    pkgs, conda = read_env_packages(env)
+    assert pkgs["pip"] == "24.0"
+    assert "pip" in conda
+
+
+def test_discover_finds_all_and_dedupes(tmp_path, monkeypatch):
+    home = tmp_path
+    make_venv(home / "proj" / ".venv", uv=True)
+    (home / "proj" / "uv.lock").write_text("")
+    make_venv(home / "plain" / ".venv")
+    make_venv(home / ".local/share/uv/tools/ruff")
+    make_venv(home / ".local/pipx/venvs/black")
+    make_conda_env(home / "proj2" / ".pixi/envs/default", {"certifi": "2025.8.3"})
+    make_conda_env(home / ".pixi/envs/ruff", {})
+    conda_env = make_conda_env(home / "miniforge3/envs/x", {"certifi": "2025.8.3"})
+    make_venv(home / ".pyenv/versions/3.12.1")
+    outside = make_conda_env(
+        tmp_path.parent / (tmp_path.name + "_ext") / "envs" / "y", {}
+    )
+
+    monkeypatch.setattr(
+        environments.shutil,
+        "which",
+        lambda name, *a, **k: "/bin/conda" if name == "conda" else None,
+    )
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        assert kw.get("timeout")
+        out = json.dumps({"envs": [str(conda_env), str(outside)]})
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(environments.subprocess, "run", fake_run)
+    envs = discover_environments(home, include_path_interpreters=False)
+    kinds = sorted(e.kind.value for e in envs)
+    assert calls and calls[0][:3] == ["conda", "env", "list"]
+    assert kinds == sorted(
+        [
+            "uv_project",
+            "plain_venv",
+            "uv_tool",
+            "pipx",
+            "pixi_project",
+            "pixi_global",
+            "conda",
+            "pyenv",
+            "conda",
+        ]
+    )
+    assert len({e.path.resolve() for e in envs}) == len(envs)
+    proj = next(e for e in envs if e.kind == EnvKind.PIXI_PROJECT)
+    assert proj.project == home / "proj2"
+    assert next(e for e in envs if e.kind == EnvKind.PIXI_GLOBAL).tool_name == "ruff"
+    assert (
+        next(e for e in envs if e.kind == EnvKind.UV_PROJECT).project == home / "proj"
+    )
+    assert next(e for e in envs if e.kind == EnvKind.PYENV).python_version == "3.12.1"
+
+
+def test_known_places_found(tmp_path, monkeypatch):
+    fw = make_framework(tmp_path / "fw", "3.11")
+    monkeypatch.setattr(environments, "_known_places", lambda home: [fw])
+    envs = discover_environments(tmp_path / "home", include_path_interpreters=False)
+    assert [e.path for e in envs] == [fw]
+    assert envs[0].python_version == "3.11"
+    assert envs[0].packages == {"pip": "24.0"}
+
+
+def test_known_places_globbing(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".pyenv/versions/3.12.1").mkdir(parents=True)
+    (home / ".local/share/uv/python/cpython-3.12").mkdir(parents=True)
+    monkeypatch.setattr(environments, "_SYSTEM_PLACES", ())
+    names = sorted(p.name for p in REAL_KNOWN_PLACES(home))
+    assert names == ["3.12.1", "cpython-3.12"]
+
+
+def test_search_home_false(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    make_venv(home / "elsewhere" / ".venv")
+    project = home / "project"
+    make_conda_env(project / ".pixi/envs/default", {})
+    monkeypatch.setattr(environments, "_known_places", lambda h: pytest.fail("known"))
+    envs = discover_environments(
+        home, extra_roots=[project], include_path_interpreters=False, search_home=False
+    )
+    assert [e.kind for e in envs] == [EnvKind.PIXI_PROJECT]
+    assert envs[0].project == project
+
+
+def test_externally_managed(tmp_path):
+    env = make_framework(tmp_path / "fw", "3.12")
+    assert read_ext(env) is False
+    (env / "lib" / "python3.12" / "EXTERNALLY-MANAGED").write_text("[x]\n")
+    assert read_ext(env) is True
+
+
+def read_ext(env: Path) -> bool:
+    return environments._externally_managed(env)
+
+
+def test_path_interpreters(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    inside = make_venv(home / "v")
+    prefix = tmp_path / "usr_local"
+    stdlib = prefix / "lib" / "python3.12"
+    purelib = stdlib / "site-packages"
+    purelib.mkdir(parents=True)
+    (purelib / "pip-23.0.dist-info").mkdir()
+    (stdlib / "EXTERNALLY-MANAGED").write_text("")
+    exe = prefix / "bin" / "python3"
+    exe.parent.mkdir()
+    exe.write_text("")
+
+    monkeypatch.setenv(
+        "PATH", f"{inside / 'bin'}{__import__('os').pathsep}{exe.parent}"
+    )
+    monkeypatch.setattr(
+        environments.shutil,
+        "which",
+        lambda name, path=None, **k: str(Path(path) / name)
+        if path and (Path(path) / name).exists()
+        else None,
+    )
+    ran = []
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd)
+        assert "-I" in cmd and kw["timeout"] == 5
+        out = json.dumps(
+            {
+                "prefix": str(prefix),
+                "purelib": str(purelib),
+                "stdlib": str(stdlib),
+                "version": "3.12.4",
+            }
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(environments.subprocess, "run", fake_run)
+    envs = discover_environments(home)
+    # The interpreter inside the discovered venv is never executed.
+    assert [c[0] for c in ran] == [str(exe)]
+    sysenv = next(e for e in envs if e.path == prefix)
+    assert sysenv.kind == EnvKind.SYSTEM
+    assert sysenv.externally_managed is True
+    assert sysenv.python_version == "3.12.4"
+    assert sysenv.packages == {"pip": "23.0"}
+    assert len(envs) == 2
+
+
+def test_python_executable(tmp_path):
+    posix = make_venv(tmp_path / "p")
+    win = make_venv(tmp_path / "w", windows=True)
+
+    def mk(p):
+        return PythonEnv(p, EnvKind.PLAIN_VENV, None, {}, set(), None, None, False)
+
+    assert python_executable(mk(posix)) == posix / "bin" / "python"
+    assert python_executable(mk(win)) == win / "Scripts" / "python.exe"
