@@ -32,6 +32,11 @@ _PIP_KINDS = (EnvKind.PLAIN_VENV, EnvKind.FRAMEWORK, EnvKind.PYENV, EnvKind.UV_P
 _CONDA_LIKE = (EnvKind.CONDA, EnvKind.PIXI_PROJECT, EnvKind.PIXI_GLOBAL)
 _PIP_MIN_PYTHON = (3, 10)
 _CONDA_BINS = ("condabin/conda", "bin/conda", "Scripts/conda.exe")
+EXTERNALLY_MANAGED_NOTE = (
+    "externally managed Python; pip will refuse to change it — "
+    "update environments created from it instead"
+)
+NO_PIP_URL_NOTE = "advisory has no pinned pip URL"
 
 
 class Status(str, Enum):
@@ -40,6 +45,7 @@ class Status(str, Enum):
     NOT_INSTALLED = "not_installed"
     UNKNOWN = "unknown"
     SKIPPED = "skipped"  # not produced in release 1
+    NO_ADVISORY = "no_advisory"  # listed without a status; never counted
 
 
 @dataclass
@@ -99,8 +105,8 @@ def _tool_fix(t: ToolInfo) -> tuple[str | None, str | None]:
         return f"uv tool upgrade {name}", None
     if m is InstallMethod.PIPX:
         return f"pipx upgrade {name}", None
-    if m is InstallMethod.CONDA and name == "conda":
-        return "conda update -n base conda", None
+    if m is InstallMethod.CONDA and name == "conda" and t.env_root is not None:
+        return f"{conda_command(t.env_root)} update -p {_q(t.env_root)} conda", None
     return None, f"update {name} with the tool that installed it"
 
 
@@ -121,7 +127,7 @@ def evaluate_tool(t: ToolInfo, mins: dict[str, PackageMinimum]) -> Finding:
             **{**base, "current": None, "location": None}, status=Status.NOT_INSTALLED
         )  # type: ignore[arg-type]
     if mn is None:
-        return Finding(**base, status=Status.OK, note="no advisory")  # type: ignore[arg-type]
+        return Finding(**base, status=Status.NO_ADVISORY, note="no advisory")  # type: ignore[arg-type]
     if t.version is None:
         return Finding(**base, status=Status.UNKNOWN, note="could not read version")  # type: ignore[arg-type]
     below = is_below(t.version, mn.min_version)
@@ -140,6 +146,8 @@ def _pip_commands(
     env: PythonEnv, pkg: str, mn: PackageMinimum, pip_mn: PackageMinimum | None
 ) -> tuple[str | None, str | None]:
     """Fix and note for upgrading `pkg` with pip / uv pip in a plain env."""
+    if env.externally_managed:
+        return None, EXTERNALLY_MANAGED_NOTE
     py = _q(python_executable(env))
     mm = _py_mm(env.python_version)
     old_python = mm is not None and mm < _PIP_MIN_PYTHON
@@ -148,7 +156,7 @@ def _pip_commands(
     if pkg == "pip":
         src = pip_mn or mn
         if not (src.fix_url and src.fix_sha256):
-            return None, "advisory has no pinned pip URL"
+            return None, NO_PIP_URL_NOTE
         fix = f'{py} -m pip install "pip @ {src.fix_url}#sha256={src.fix_sha256}"'
         if mm is None:
             return fix, (
@@ -159,16 +167,41 @@ def _pip_commands(
     if env.packages is not None and "pip" in env.packages:
         if old_python:
             return None, recreate
-        return f"{py} -m pip install --upgrade {req}", "upgrade pip first"
+        fix = f"{py} -m pip install --upgrade {req}"
+        return fix, "upgrade pip first" if _pip_outdated(env, pip_mn) else None
     return f"uv pip install --python {py} {req}", None
 
 
-def _conda_selector(path: Path) -> str:
-    if path.parent.name == "envs":
-        return f"-n {shlex.quote(path.name)}"
-    if any((path / rel).exists() for rel in _CONDA_BINS):
-        return "-n base"
-    return f"-p {_q(path)}"
+def _pip_outdated(env: PythonEnv, pip_mn: PackageMinimum | None) -> bool:
+    cur = (env.packages or {}).get("pip")
+    if pip_mn is None or cur is None:
+        return False
+    return is_below(cur, pip_mn.min_version) is True
+
+
+def _conda_bin_in(root: Path) -> Path | None:
+    for rel in _CONDA_BINS:
+        if (root / rel).exists():
+            return root / rel
+    return None
+
+
+def conda_command(path: Path) -> str:
+    """The conda that owns `path` (quoted), or plain `conda` if none is found.
+
+    Commands target envs with `-p <path>`, so this only picks which
+    installation runs them; `-n` would resolve against the conda on PATH.
+    """
+    exe = _conda_bin_in(path)
+    if exe is None and path.parent.name == "envs":
+        exe = _conda_bin_in(path.parent.parent)
+    return _q(exe) if exe is not None else "conda"
+
+
+def _pip_pin_fix(cmd_prefix: str, src: PackageMinimum) -> tuple[str | None, str | None]:
+    if not (src.fix_url and src.fix_sha256):
+        return None, NO_PIP_URL_NOTE
+    return f'{cmd_prefix} "pip @ {src.fix_url}#sha256={src.fix_sha256}"', None
 
 
 def _env_fix(
@@ -187,13 +220,20 @@ def _env_fix(
     if kind in (EnvKind.UV_TOOL, EnvKind.PIPX):
         if env.tool_name is None:
             return None, "could not determine tool name"
-        cmd = "uv tool upgrade" if kind is EnvKind.UV_TOOL else "pipx upgrade"
-        return f"{cmd} {shlex.quote(env.tool_name)}", None
+        tool = shlex.quote(env.tool_name)
+        if kind is EnvKind.UV_TOOL:
+            return f"uv tool upgrade {tool}", None
+        # `pipx upgrade` keeps already-satisfied deps such as certifi.
+        if pkg == "pip":
+            return _pip_pin_fix(f"pipx runpip {tool} install", mins.get("pip") or mn)
+        req = f'"{pkg}>={mn.min_version}"'
+        return f"pipx runpip {tool} install --upgrade {req}", None
     if kind is EnvKind.PIXI_PROJECT:
         if env.project is None:
             return None, "managed by pixi"
+        # One package per command: pixi rejects names that are not in the lock.
         return (
-            f"cd {_q(env.project)} && pixi update certifi ca-certificates pip",
+            f"cd {_q(env.project)} && pixi update {shlex.quote(pkg)}",
             "managed by pixi",
         )
     if kind is EnvKind.PIXI_GLOBAL:
@@ -202,8 +242,11 @@ def _env_fix(
         return f"pixi global update {shlex.quote(env.tool_name)}", None
     if kind is EnvKind.CONDA:
         if pkg in env.conda_packages:
-            return f"conda update {_conda_selector(env.path)} {pkg}", None
+            conda = conda_command(env.path)
+            return f"{conda} update -p {_q(env.path)} {shlex.quote(pkg)}", None
         fix, note = _pip_commands(env, pkg, mn, mins.get("pip"))
+        if env.externally_managed:
+            return fix, note
         extra = "env mixes pip and conda packages"
         return fix, f"{note}; {extra}" if note else extra
     if kind is EnvKind.HOMEBREW:
@@ -231,7 +274,9 @@ def evaluate_env(e: PythonEnv, mins: dict[str, PackageMinimum]) -> list[Finding]
             "env_kind": e.kind,
         }
         if mn is None:
-            out.append(Finding(**base, status=Status.OK, note="no advisory"))  # type: ignore[arg-type]
+            out.append(
+                Finding(**base, status=Status.NO_ADVISORY, note="no advisory")  # type: ignore[arg-type]
+            )
             continue
         if e.packages is None:
             out.append(
@@ -278,7 +323,7 @@ def evaluate_lockpin(p: LockPin, mins: dict[str, PackageMinimum]) -> Finding:
     if p.error is not None:
         return Finding(**base, status=Status.UNKNOWN, note=p.error)  # type: ignore[arg-type]
     if mn is None:
-        return Finding(**base, status=Status.OK, note="no advisory")  # type: ignore[arg-type]
+        return Finding(**base, status=Status.NO_ADVISORY, note="no advisory")  # type: ignore[arg-type]
     below = is_below(p.version, mn.min_version) if p.version else None
     if below is None:
         return Finding(
@@ -326,7 +371,9 @@ def scan(home: Path, project: Path, *, full: bool = True) -> ScanResult:
     advisories = load_advisories()
     mins = minimums_by_package(advisories)
     if full:
-        envs = discover_environments(home, extra_roots=[project])
+        # The home search already covers a project inside home.
+        inside_home = project == home or home in project.parents
+        envs = discover_environments(home, extra_roots=[] if inside_home else [project])
     else:
         envs = discover_environments(
             home,

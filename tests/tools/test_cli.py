@@ -281,3 +281,81 @@ def test_homebrew_formula_shown_and_in_json(monkeypatch):
     assert "homebrew (gh)" in runner.invoke(app, ["tools", "check"]).output
     data = json.loads(runner.invoke(app, ["tools", "check", "--json"]).output)
     assert any(x["formula"] == "gh" for x in data["findings"])
+
+
+def _no_advisory_result() -> ScanResult:
+    return _result(
+        [
+            _f(
+                "tool",
+                name,
+                Status.NO_ADVISORY,
+                location=Path(f"/usr/bin/{name}"),
+                current="2.0",
+                note="no advisory",
+                install_method=InstallMethod.SYSTEM,
+            )
+            for name in ("gh", "docker", "rg")
+        ]
+    )
+
+
+def test_no_advisory_shown_as_na_and_not_counted():
+    con = Console(width=160, record=True, force_terminal=False)
+    report.render(_no_advisory_result(), con, HOME)
+    text = con.export_text()
+    rows = [line for line in text.splitlines() if "/usr/bin/docker" in line]
+    assert len(rows) == 1 and "n/a" in rows[0]
+    assert "OK" not in rows[0] and "no advisory" not in rows[0]
+    # Same counts as without the three no-advisory tools.
+    assert report.summary_line(_no_advisory_result().findings) == report.summary_line(
+        _result().findings
+    )
+    assert "3 outdated · 1 unknown · 3 ok · 2 not installed" in text
+
+
+def test_no_advisory_is_dim_na():
+    assert report._status_text(Status.NO_ADVISORY).plain == "n/a"
+    assert str(report._status_text(Status.NO_ADVISORY).style) == "dim"
+
+
+def test_no_advisory_json_and_fail_on_outdated(monkeypatch):
+    res = ScanResult(
+        [_f("tool", "git", Status.NO_ADVISORY, location=Path("/usr/bin/git"))],
+        [_adv()],
+        True,
+    )
+    _patch(monkeypatch, res)
+    r = runner.invoke(app, ["tools", "check", "--fail-on-outdated"])
+    assert r.exit_code == 0
+    assert "0 outdated · 0 unknown · 0 ok · 0 not installed" in r.output
+    data = json.loads(runner.invoke(app, ["tools", "check", "--json"]).output)
+    assert data["findings"][0]["status"] == "no_advisory"
+
+
+def test_nonexistent_path_is_an_error(monkeypatch, tmp_path):
+    _patch(monkeypatch, _result())
+    missing = tmp_path / "typo"
+    r = runner.invoke(app, ["tools", "check", "--path", str(missing)])
+    assert r.exit_code != 0
+    assert "does not exist" in r.output
+
+
+def test_file_path_is_an_error(monkeypatch, tmp_path):
+    _patch(monkeypatch, _result())
+    f = tmp_path / "file.txt"
+    f.write_text("")
+    r = runner.invoke(app, ["tools", "check", "--path", str(f)])
+    assert r.exit_code != 0
+
+
+def test_relative_path_is_resolved(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(
+        tools_cli, "scan", lambda home, path, **k: seen.append(path) or _result()
+    )
+    (tmp_path / "proj").mkdir()
+    monkeypatch.chdir(tmp_path)
+    r = runner.invoke(app, ["tools", "check", "--path", "proj"])
+    assert r.exit_code == 0
+    assert seen == [(tmp_path / "proj").resolve()]

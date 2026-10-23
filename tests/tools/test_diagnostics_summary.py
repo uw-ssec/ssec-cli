@@ -132,3 +132,14 @@ def test_check_tools_lists_rg(monkeypatch, capsys):
     monkeypatch.setattr(main, "is_tool_installed", lambda t: (True, f"/bin/{t}"))
     main.check_tools()
     assert "rg" in capsys.readouterr().out
+
+
+def test_summary_ignores_no_advisory(monkeypatch, capsys):
+    _patch(
+        monkeypatch,
+        [_f("git", Status.NO_ADVISORY, HOME / "bin/git", minimum=None)],
+    )
+    main.print_tool_versions_summary(HOME, HOME)
+    out = capsys.readouterr().out
+    assert "git" not in out
+    assert CLEAR in out

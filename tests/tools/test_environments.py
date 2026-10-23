@@ -186,6 +186,7 @@ def test_known_places_globbing(tmp_path, monkeypatch):
     (home / ".pyenv/versions/3.12.1").mkdir(parents=True)
     (home / ".local/share/uv/python/cpython-3.12").mkdir(parents=True)
     monkeypatch.setattr(environments, "_SYSTEM_PLACES", ())
+    monkeypatch.delenv("POETRY_VIRTUALENVS_PATH", raising=False)
     names = sorted(p.name for p in REAL_KNOWN_PLACES(home))
     assert names == ["3.12.1", "cpython-3.12"]
 
@@ -233,9 +234,9 @@ def test_path_interpreters(tmp_path, monkeypatch):
     monkeypatch.setattr(
         environments.shutil,
         "which",
-        lambda name, path=None, **k: str(Path(path) / name)
-        if path and (Path(path) / name).exists()
-        else None,
+        lambda name, path=None, **k: (
+            str(Path(path) / name) if path and (Path(path) / name).exists() else None
+        ),
     )
     ran = []
 
@@ -346,3 +347,107 @@ def test_solve_group_env_is_pixi_project_with_project_set(tmp_path):
     e = _build_env(p, tmp_path)
     assert e.kind == EnvKind.PIXI_PROJECT
     assert e.project == tmp_path / "proj"
+
+
+def test_classify_conda_under_pyenv_is_conda(tmp_path):
+    home = tmp_path
+    mf = make_conda_env(home / ".pyenv/versions/miniforge3-24.3.0-0", {})
+    assert classify_env(mf, home) == EnvKind.CONDA
+    # Pixi rules still come first, even though pixi envs carry conda-meta.
+    px = make_conda_env(home / "proj/.pixi/envs/default", {})
+    assert classify_env(px, home) == EnvKind.PIXI_PROJECT
+    sg = make_conda_env(home / "proj/.pixi/solve-group-envs/default-1", {})
+    assert classify_env(sg, home) == EnvKind.PIXI_PROJECT
+    gl = make_conda_env(home / ".pixi/envs/ruff", {})
+    assert classify_env(gl, home) == EnvKind.PIXI_GLOBAL
+    # A plain pyenv version without conda-meta is still pyenv.
+    plain = home / ".pyenv/versions/3.12.1"
+    plain.mkdir(parents=True)
+    assert classify_env(plain, home) == EnvKind.PYENV
+
+
+def test_uv_venv_not_named_dot_venv_is_plain(tmp_path):
+    home = tmp_path
+    agent = make_venv(home / ".hermes/hermes-agent/venv", uv=True)
+    (home / ".hermes/hermes-agent/uv.lock").write_text("")
+    assert classify_env(agent, home) == EnvKind.PLAIN_VENV
+    envs = discover_environments(home, include_path_interpreters=False)
+    e = next(x for x in envs if x.path == agent)
+    assert (e.kind, e.project) == (EnvKind.PLAIN_VENV, None)
+    proj = make_venv(home / ".hermes/hermes-agent/.venv", uv=True)
+    assert classify_env(proj, home) == EnvKind.UV_PROJECT
+
+
+def _uv_python(root: Path, managed: bool = True) -> Path:
+    stdlib = root / "lib" / "python3.12"
+    (stdlib / "site-packages" / "pip-25.0.dist-info").mkdir(parents=True)
+    (root / "bin").mkdir()
+    (root / "bin" / "python3.12").write_text("")
+    if managed:
+        (stdlib / "EXTERNALLY-MANAGED").write_text("[externally-managed]\n")
+    return root
+
+
+def test_discovery_sets_externally_managed_for_uv_python(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    uvpy = _uv_python(home / ".local/share/uv/python/cpython-3.12.1-macos")
+    monkeypatch.setattr(environments, "_known_places", lambda h: [uvpy])
+    envs = discover_environments(home, include_path_interpreters=False)
+    assert [(e.kind, e.externally_managed) for e in envs] == [(EnvKind.UV_PYTHON, True)]
+
+
+def test_discovery_sets_externally_managed_for_marker_found_env(tmp_path):
+    env = make_conda_env(tmp_path / "c", {"certifi": "2025.8.3"})
+    (env / "lib" / "python3.12" / "EXTERNALLY-MANAGED").write_text("")
+    make_conda_env(tmp_path / "d", {"certifi": "2025.8.3"})
+    envs = {
+        e.path.name: e
+        for e in discover_environments(tmp_path, include_path_interpreters=False)
+    }
+    assert envs["c"].externally_managed is True
+    assert envs["d"].externally_managed is False
+
+
+def test_externally_managed_windows_and_lib64(tmp_path):
+    win = tmp_path / "win"
+    (win / "Lib").mkdir(parents=True)
+    (win / "Lib" / "EXTERNALLY-MANAGED").write_text("")
+    assert environments._externally_managed(win) is True
+    l64 = tmp_path / "l64"
+    (l64 / "lib64" / "python3.12").mkdir(parents=True)
+    (l64 / "lib64" / "python3.12" / "EXTERNALLY-MANAGED").write_text("")
+    assert environments._externally_managed(l64) is True
+
+
+def test_venv_is_never_externally_managed(tmp_path):
+    # pip skips the PEP 668 check inside a virtual environment.
+    venv = make_venv(tmp_path / "v")
+    (venv / "lib" / "python3.12" / "EXTERNALLY-MANAGED").write_text("")
+    assert environments._externally_managed(venv) is False
+
+
+def test_known_places_finds_poetry_venvs(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    mac = make_venv(home / "Library/Caches/pypoetry/virtualenvs/app-AbC-py3.12")
+    lin = make_venv(home / ".cache/pypoetry/virtualenvs/lib-XyZ-py3.11", py="3.11")
+    (home / ".cache/pypoetry/virtualenvs/not-a-venv").mkdir()
+    custom = tmp_path / "poetry-venvs"
+    mine = make_venv(custom / "tool-123-py3.12")
+    (custom / "junk").mkdir()
+    monkeypatch.setattr(environments, "_SYSTEM_PLACES", ())
+    monkeypatch.setenv("POETRY_VIRTUALENVS_PATH", str(custom))
+    assert sorted(REAL_KNOWN_PLACES(home)) == sorted([mac, lin, mine])
+    monkeypatch.delenv("POETRY_VIRTUALENVS_PATH")
+    assert sorted(REAL_KNOWN_PLACES(home)) == sorted([mac, lin])
+
+
+def test_poetry_venvs_discovered_and_classified(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    pv = make_venv(home / "Library/Caches/pypoetry/virtualenvs/app-AbC-py3.12")
+    monkeypatch.setattr(environments, "_SYSTEM_PLACES", ())
+    monkeypatch.setattr(environments, "_HOME_PLACES", ())
+    monkeypatch.delenv("POETRY_VIRTUALENVS_PATH", raising=False)
+    monkeypatch.setattr(environments, "_known_places", REAL_KNOWN_PLACES)
+    envs = discover_environments(home, include_path_interpreters=False)
+    assert [(e.path, e.kind) for e in envs] == [(pv, EnvKind.PLAIN_VENV)]
+    assert envs[0].packages == {"pip": "24.0", "certifi": "2025.8.3"}

@@ -24,7 +24,9 @@ _STYLE = {
     Status.UNKNOWN: ("UNKNOWN", "yellow"),
     Status.SKIPPED: ("SKIPPED", "dim"),
     Status.NOT_INSTALLED: ("not installed", "dim"),
+    Status.NO_ADVISORY: ("n/a", "dim"),
 }
+_QUIET_NOTES = (Status.OK, Status.NO_ADVISORY)
 _RANK = {Status.OUTDATED: 0, Status.UNKNOWN: 1}
 
 
@@ -91,7 +93,7 @@ def _fix_cell(findings: list[Finding], fixes: _Fixes, used: dict[int, str]) -> T
             used[n] = f.fix
             if f"[{n}]" not in refs:
                 refs.append(f"[{n}]")
-        if f.note and f.status is not Status.OK and f.note not in notes:
+        if f.note and f.status not in _QUIET_NOTES and f.note not in notes:
             notes.append(f.note)
     return Text("\n".join(filter(None, [" ".join(refs), "; ".join(notes)])))
 
@@ -203,6 +205,7 @@ def _tools_table(
 
 
 def summary_line(findings: list[Finding]) -> str:
+    # NO_ADVISORY items are listed without a status, so they are not counted.
     c = Counter(f.status for f in findings)
     parts = [
         f"{c[Status.OUTDATED]} outdated",

@@ -29,6 +29,11 @@ _SYSTEM_PLACES: tuple[str, ...] = (
     "/usr/local/opt/python@*/Frameworks/Python.framework/Versions/*",
 )
 _HOME_PLACES: tuple[str, ...] = (".pyenv/versions/*", ".local/share/uv/python/*")
+# Poetry keeps its venvs in cache dirs that the marker search excludes.
+_POETRY_PLACES: tuple[str, ...] = (
+    "Library/Caches/pypoetry/virtualenvs/*",
+    ".cache/pypoetry/virtualenvs/*",
+)
 _HOMEBREW_PREFIXES = ("/opt/homebrew", "/usr/local/Cellar", "/usr/local/opt")
 _SYSTEM_PREFIXES = ("/usr", "/System", "/Library/Developer")
 
@@ -95,6 +100,9 @@ def classify_env(path: Path, home: Path) -> EnvKind:
         return EnvKind.PIXI_GLOBAL if grand.parent == home else EnvKind.PIXI_PROJECT
     if parent.name == "solve-group-envs" and grand.name == ".pixi":
         return EnvKind.PIXI_PROJECT
+    # A conda install is conda wherever it lives (e.g. pyenv's miniforge3-*).
+    if (path / "conda-meta").is_dir():
+        return EnvKind.CONDA
     if parent.name == "tools" and grand.name == "uv":
         return EnvKind.UV_TOOL
     if parent.name == "venvs" and grand.name == "pipx":
@@ -103,10 +111,13 @@ def classify_env(path: Path, home: Path) -> EnvKind:
         return EnvKind.UV_PYTHON
     if ".pyenv" in path.parts and "versions" in path.parts:
         return EnvKind.PYENV
-    if (path / "conda-meta").is_dir():
-        return EnvKind.CONDA
     if (path / "pyvenv.cfg").is_file():
-        if "uv" in _cfg(path) and (parent / "uv.lock").is_file():
+        # `uv sync` only manages `.venv`; any other uv-made venv is plain.
+        if (
+            path.name == ".venv"
+            and "uv" in _cfg(path)
+            and (parent / "uv.lock").is_file()
+        ):
             return EnvKind.UV_PROJECT
         return EnvKind.PLAIN_VENV
     if _under(path, _HOMEBREW_PREFIXES):
@@ -212,7 +223,18 @@ def read_env_packages(path: Path) -> tuple[dict[str, str] | None, set[str]]:
 
 
 def _externally_managed(path: Path) -> bool:
-    return bool(glob.glob(str(path / "lib" / "python*" / "EXTERNALLY-MANAGED")))
+    """True if the env's stdlib dir carries a PEP 668 EXTERNALLY-MANAGED marker.
+
+    pip ignores the marker inside a virtual environment, so venvs never count.
+    """
+    if (path / "pyvenv.cfg").is_file():
+        return False
+    patterns = [
+        path / "lib" / "python*" / "EXTERNALLY-MANAGED",
+        path / "lib64" / "python*" / "EXTERNALLY-MANAGED",
+        path / "Lib" / "EXTERNALLY-MANAGED",
+    ]
+    return any(glob.glob(str(p)) for p in patterns)
 
 
 def _version_from_dirname(path: Path) -> str | None:
@@ -277,6 +299,14 @@ def _known_places(home: Path) -> list[Path]:
         for hit in sorted(glob.glob(pattern)):
             p = Path(hit)
             if p.name != "Current" and p.is_dir():
+                out.append(p)
+    venv_patterns = [str(home / p) for p in _POETRY_PLACES]
+    if poetry := os.environ.get("POETRY_VIRTUALENVS_PATH"):
+        venv_patterns.append(str(Path(poetry).expanduser() / "*"))
+    for pattern in venv_patterns:
+        for hit in sorted(glob.glob(pattern)):
+            p = Path(hit)
+            if (p / "pyvenv.cfg").is_file():
                 out.append(p)
     return out
 

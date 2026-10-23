@@ -16,7 +16,13 @@ tools_app = typer.Typer(
 @tools_app.command()
 def check(
     path: Path = typer.Option(
-        Path.cwd, "--path", help="Project directory to scan for lockfiles."
+        Path.cwd,
+        "--path",
+        help="Project directory to scan for lockfiles.",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
     ),
     json_: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
     fail_on_outdated: bool = typer.Option(

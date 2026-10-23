@@ -66,7 +66,13 @@ def tool(name, method, version="0.0.1", formula=None, path="/x/bin/t"):
         ),
         ("sigstore", InstallMethod.UV_TOOL, None, "uv tool upgrade sigstore", None),
         ("sigstore", InstallMethod.PIPX, None, "pipx upgrade sigstore", None),
-        ("conda", InstallMethod.CONDA, None, "conda update -n base conda", None),
+        (
+            "conda",
+            InstallMethod.CONDA,
+            None,
+            None,
+            "update conda with the tool that installed it",
+        ),
         ("pip", InstallMethod.VENV, None, None, "see Python environments"),
         ("pip", InstallMethod.CONDA, None, None, "see Python environments"),
         (
@@ -118,10 +124,30 @@ def test_tool_not_on_path():
     )
 
 
+def test_conda_tool_targets_its_own_install_by_path(tmp_path):
+    (tmp_path / "condabin").mkdir()
+    (tmp_path / "condabin" / "conda").touch()
+    t = ToolInfo(
+        "conda",
+        tmp_path / "condabin" / "conda",
+        "0.0.1",
+        InstallMethod.CONDA,
+        None,
+        tmp_path,
+    )
+    f = evaluate_tool(t, MINS)
+    assert (f.status, f.fix, f.note) == (
+        Status.OUTDATED,
+        f"{tmp_path}/condabin/conda update -p {tmp_path} conda",
+        None,
+    )
+
+
 def test_no_advisory_tool_has_no_status():
     f = evaluate_tool(tool("git", InstallMethod.SYSTEM, version="2.1"), MINS)
+    assert f.status.value == "no_advisory"
     assert (f.status, f.minimum, f.fix, f.note) == (
-        Status.OK,
+        Status.NO_ADVISORY,
         None,
         None,
         "no advisory",
@@ -206,8 +232,11 @@ def test_pixi_solve_group_env_gets_pixi_fix():
         conda_packages={"pip"},
     )
     f = by_item(evaluate_env(e, MINS))["pip"]
-    assert f.fix == "cd /p && pixi update certifi ca-certificates pip"
-    assert f.note == "managed by pixi"
+    assert (f.status, f.fix, f.note) == (
+        Status.OUTDATED,
+        "cd /p && pixi update pip",
+        "managed by pixi",
+    )
 
 
 def test_python_3_10_is_new_enough():
@@ -230,24 +259,63 @@ def test_uv_project():
         assert f[item].note == note
 
 
-@pytest.mark.parametrize(
-    ("kind", "fix"),
-    [
-        (EnvKind.UV_TOOL, "uv tool upgrade sigstore"),
-        (EnvKind.PIPX, "pipx upgrade sigstore"),
-    ],
-)
-def test_tool_envs(kind, fix):
-    f = by_item(evaluate_env(env(kind, tool_name="sigstore"), MINS))
-    assert (f["certifi"].fix, f["certifi"].note) == (fix, None)
+def test_uv_tool_env():
+    f = by_item(evaluate_env(env(EnvKind.UV_TOOL, tool_name="sigstore"), MINS))
+    for item in ("pip", "certifi"):
+        assert (f[item].status, f[item].fix, f[item].note) == (
+            Status.OUTDATED,
+            "uv tool upgrade sigstore",
+            None,
+        )
+
+
+def test_pipx_env_uses_runpip():
+    f = by_item(evaluate_env(env(EnvKind.PIPX, tool_name="my tool"), MINS))
+    assert (f["certifi"].status, f["certifi"].fix, f["certifi"].note) == (
+        Status.OUTDATED,
+        "pipx runpip 'my tool' install --upgrade \"certifi>=2026.10.19\"",
+        None,
+    )
+    assert (f["pip"].status, f["pip"].fix, f["pip"].note) == (
+        Status.OUTDATED,
+        f"pipx runpip 'my tool' install {PIP_FIX}",
+        None,
+    )
+
+
+def test_pipx_env_unpinned_pip_has_no_fix():
+    mins = dict(MINS)
+    mins["pip"] = replace(PIP, fix_url=None, fix_sha256=None)
+    f = by_item(evaluate_env(env(EnvKind.PIPX, tool_name="black"), mins))["pip"]
+    assert (f.status, f.fix, f.note) == (
+        Status.OUTDATED,
+        None,
+        "advisory has no pinned pip URL",
+    )
 
 
 def test_pixi_project():
     f = by_item(evaluate_env(env(EnvKind.PIXI_PROJECT, project=Path("/p")), MINS))
     assert set(f) == {"pip", "certifi", "ca-certificates"}
-    for x in f.values():
-        assert x.fix == "cd /p && pixi update certifi ca-certificates pip"
-        assert x.note == "managed by pixi"
+    for item, x in f.items():
+        assert (x.status, x.fix, x.note) == (
+            Status.OUTDATED,
+            f"cd /p && pixi update {item}",
+            "managed by pixi",
+        )
+
+
+def test_pixi_project_ca_certificates_only():
+    pkgs = {**GOOD, "ca-certificates": "2025.1.1"}
+    e = env(EnvKind.PIXI_PROJECT, project=Path("/p q"), packages=pkgs)
+    out = [f for f in evaluate_env(e, MINS) if f.status is Status.OUTDATED]
+    assert [(f.item, f.fix, f.note) for f in out] == [
+        (
+            "ca-certificates",
+            "cd '/p q' && pixi update ca-certificates",
+            "managed by pixi",
+        )
+    ]
 
 
 def test_pixi_global():
@@ -266,18 +334,72 @@ def test_conda_installed_packages():
         conda_packages={"pip", "certifi", "ca-certificates"},
     )
     f = by_item(evaluate_env(e, MINS))
-    assert f["certifi"].fix == "conda update -n science certifi"
-    assert f["ca-certificates"].fix == "conda update -n science ca-certificates"
-    assert f["pip"].fix == "conda update -n science pip" and f["pip"].note is None
+    # No conda binary at /c, so the conda on PATH runs it, but still by path.
+    for item in ("pip", "certifi", "ca-certificates"):
+        assert (f[item].status, f[item].fix, f[item].note) == (
+            Status.OUTDATED,
+            f"conda update -p /c/envs/science {item}",
+            None,
+        )
 
 
-def test_conda_base_with_conda_binary(tmp_path):
-    (tmp_path / "condabin").mkdir()
-    (tmp_path / "condabin" / "conda").touch()
+def _touch(p):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.touch()
+
+
+def test_conda_base_with_own_condabin(tmp_path):
+    _touch(tmp_path / "condabin" / "conda")
+    _touch(tmp_path / "bin" / "conda")
     e = env(EnvKind.CONDA, path=str(tmp_path), conda_packages={"certifi"})
-    assert (
-        by_item(evaluate_env(e, MINS))["certifi"].fix == "conda update -n base certifi"
+    f = by_item(evaluate_env(e, MINS))["certifi"]
+    assert (f.status, f.fix, f.note) == (
+        Status.OUTDATED,
+        f"{tmp_path}/condabin/conda update -p {tmp_path} certifi",
+        None,
     )
+
+
+def test_conda_base_with_only_bin_conda(tmp_path):
+    _touch(tmp_path / "bin" / "conda")
+    e = env(EnvKind.CONDA, path=str(tmp_path), conda_packages={"certifi"})
+    f = by_item(evaluate_env(e, MINS))["certifi"]
+    assert f.fix == f"{tmp_path}/bin/conda update -p {tmp_path} certifi"
+
+
+def test_conda_named_env_uses_root_conda(tmp_path):
+    _touch(tmp_path / "condabin" / "conda")
+    foo = tmp_path / "envs" / "foo"
+    foo.mkdir(parents=True)
+    e = env(EnvKind.CONDA, path=str(foo), conda_packages={"certifi"})
+    f = by_item(evaluate_env(e, MINS))["certifi"]
+    assert (f.status, f.fix, f.note) == (
+        Status.OUTDATED,
+        f"{tmp_path}/condabin/conda update -p {foo} certifi",
+        None,
+    )
+
+
+def test_conda_named_env_without_root_conda_falls_back(tmp_path):
+    foo = tmp_path / "envs" / "foo"
+    foo.mkdir(parents=True)
+    e = env(EnvKind.CONDA, path=str(foo), conda_packages={"certifi"})
+    f = by_item(evaluate_env(e, MINS))["certifi"]
+    assert (f.status, f.fix, f.note) == (
+        Status.OUTDATED,
+        f"conda update -p {foo} certifi",
+        None,
+    )
+
+
+def test_conda_binary_path_with_space_is_quoted(tmp_path):
+    root = tmp_path / "my conda"
+    _touch(root / "condabin" / "conda")
+    foo = root / "envs" / "foo"
+    foo.mkdir(parents=True)
+    e = env(EnvKind.CONDA, path=str(foo), conda_packages={"certifi"})
+    f = by_item(evaluate_env(e, MINS))["certifi"]
+    assert f.fix == f"'{root}/condabin/conda' update -p '{foo}' certifi"
 
 
 def test_conda_env_outside_envs_dir_uses_prefix():
@@ -306,6 +428,66 @@ def test_conda_pip_installed_package():
         == '/c/envs/science/bin/python -m pip install --upgrade "certifi>=2026.10.19"'
     )
     assert c.note == "upgrade pip first; env mixes pip and conda packages"
+
+
+def test_upgrade_pip_first_only_when_pip_outdated():
+    pkgs = {"pip": GOOD["pip"], "certifi": "2025.1.1"}
+    f = by_item(evaluate_env(env(EnvKind.PLAIN_VENV, packages=pkgs), MINS))
+    assert (f["certifi"].status, f["certifi"].fix, f["certifi"].note) == (
+        Status.OUTDATED,
+        '/e/venv/bin/python -m pip install --upgrade "certifi>=2026.10.19"',
+        None,
+    )
+    assert f["pip"].status is Status.OK
+
+
+def test_conda_pip_certifi_with_current_pip_has_no_upgrade_pip_note():
+    e = env(
+        EnvKind.CONDA,
+        path="/c/envs/science",
+        packages={"pip": GOOD["pip"], "certifi": "2025.1.1", "ca-certificates": "1"},
+        conda_packages={"pip", "ca-certificates"},
+    )
+    c = by_item(evaluate_env(e, MINS))["certifi"]
+    assert c.note == "env mixes pip and conda packages"
+
+
+EM_NOTE = (
+    "externally managed Python; pip will refuse to change it — "
+    "update environments created from it instead"
+)
+
+
+@pytest.mark.parametrize(
+    "kind", [EnvKind.PLAIN_VENV, EnvKind.FRAMEWORK, EnvKind.PYENV, EnvKind.UV_PYTHON]
+)
+def test_externally_managed_gets_no_pip_fix(kind):
+    e = env(kind, path="/u/uv/python/cpython-3.12", externally_managed=True)
+    f = by_item(evaluate_env(e, MINS))
+    for item in ("pip", "certifi"):
+        assert (f[item].status, f[item].fix, f[item].note) == (
+            Status.OUTDATED,
+            None,
+            EM_NOTE,
+        )
+
+
+def test_externally_managed_conda_pip_branch_gets_no_fix():
+    e = env(
+        EnvKind.CONDA,
+        path="/c",
+        conda_packages={"ca-certificates"},
+        externally_managed=True,
+    )
+    f = by_item(evaluate_env(e, MINS))
+    for item in ("pip", "certifi"):
+        assert (f[item].status, f[item].fix, f[item].note) == (
+            Status.OUTDATED,
+            None,
+            EM_NOTE,
+        )
+    # conda-installed packages are still updated with conda.
+    assert f["ca-certificates"].fix == "conda update -p /c ca-certificates"
 
 
 def test_system_outdated():
@@ -399,6 +581,17 @@ def test_lockpin_ok():
     assert (f.status, f.fix) == (Status.OK, None)
 
 
+def test_lockpin_without_advisory_is_no_advisory():
+    f = evaluate_lockpin(LockPin(Path("/p/uv.lock"), "numpy", "1.0"), MINS)
+    assert (f.status, f.fix, f.note) == (Status.NO_ADVISORY, None, "no advisory")
+
+
+def test_env_package_without_advisory_is_no_advisory():
+    mins = {k: v for k, v in MINS.items() if k != "certifi"}
+    f = by_item(evaluate_env(env(EnvKind.PLAIN_VENV), mins))["certifi"]
+    assert (f.status, f.fix, f.note) == (Status.NO_ADVISORY, None, "no advisory")
+
+
 def test_lockpin_error_is_unknown():
     f = evaluate_lockpin(LockPin(Path("/p/pixi.lock"), "", None, "bad toml"), MINS)
     assert (f.status, f.fix, f.note) == (Status.UNKNOWN, None, "bad toml")
@@ -465,6 +658,15 @@ def test_scan_not_full(monkeypatch):
     assert calls["tools"] == ((Path("/h"),), {})
     assert calls["pins"] == ((Path("/p"),), {"recursive": False})
     assert res.findings == [] and res.used_rg is False
+
+
+@pytest.mark.parametrize("project", [Path("/h"), Path("/h/work/p")])
+def test_scan_full_skips_project_inside_home(monkeypatch, project):
+    calls = _patch(monkeypatch)
+    monkeypatch.setattr(ev, "rg_available", lambda: True)
+    scan(Path("/h"), project)
+    assert calls["env"] == ((Path("/h"),), {"extra_roots": []})
+    assert calls["pins"] == ((project,), {"recursive": True})
 
 
 def test_scan_survives_a_bad_item(monkeypatch):
