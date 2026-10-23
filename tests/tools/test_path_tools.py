@@ -148,3 +148,41 @@ def test_scan_finds_tool(tmp_path, monkeypatch):
     [info] = scan_path_tools(tmp_path / "home", ["mytool"])
     assert info.path == bindir / "mytool"
     assert info.version == "3.4.5"
+
+
+def test_venv_python_symlinked_to_homebrew_is_venv(tmp_path, home):
+    real = _touch(tmp_path / "opt/homebrew/Cellar/python@3.12/3.12.1/bin/python3.12")
+    venv = tmp_path / "proj/.venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = /x\n")
+    (venv / "bin/python").symlink_to(real)
+    got = detect_install_method("python", venv / "bin/python", home)
+    assert got == (InstallMethod.VENV, None, venv)
+
+
+def test_pixi_env_is_pixi_global(home):
+    env = home / ".pixi/envs/x"
+    (env / "conda-meta").mkdir(parents=True)
+    p = _touch(env / "bin/x")
+    assert detect_install_method("x", p, home) == (
+        InstallMethod.PIXI_GLOBAL,
+        None,
+        None,
+    )
+
+
+def test_condabin_conda(tmp_path, home):
+    prefix = tmp_path / "miniconda3"
+    (prefix / "conda-meta").mkdir(parents=True)
+    p = _touch(prefix / "condabin/conda")
+    assert detect_install_method("conda", p, home) == (
+        InstallMethod.CONDA,
+        None,
+        prefix,
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell scripts")
+def test_version_non_utf8_output(tmp_path):
+    t = _script(tmp_path / "bad", "printf '\\377\\376\\n'; echo 'tool 1.2.3'")
+    assert tool_version(t) == "1.2.3"

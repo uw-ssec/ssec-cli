@@ -25,6 +25,7 @@ TOOLS_TO_CHECK: tuple[str, ...] = (
 
 VERSION_TIMEOUT = 5
 
+_BIN_DIRS = ("bin", "condabin", "Scripts")
 _SYSTEM_DIRS = (Path("/usr/bin"), Path("/bin"), Path("/usr/sbin"), Path("/sbin"))
 
 
@@ -74,6 +75,17 @@ def detect_install_method(
             return InstallMethod.STANDALONE, None, None
         return InstallMethod.PIXI_GLOBAL, None, None
 
+    # An env's own executables may be symlinks out of the env (e.g. a venv's
+    # python), so classify envs on the unresolved prefix first.
+    if path.parent.name in _BIN_DIRS:
+        env = path.parent.parent
+        if (env / "conda-meta").is_dir():
+            if _is_under(env, [h / ".pixi" / "envs" for h in homes]):
+                return InstallMethod.PIXI_GLOBAL, None, None
+            return InstallMethod.CONDA, None, env
+        if (env / "pyvenv.cfg").is_file():
+            return InstallMethod.VENV, None, env
+
     try:
         real = resolve(path) if resolve else path.resolve()
     except (OSError, RuntimeError):
@@ -96,11 +108,12 @@ def detect_install_method(
     if _is_under(real, [h / ".pixi" / "envs" for h in homes]):
         return InstallMethod.PIXI_GLOBAL, None, None
 
-    prefix = real.parent.parent
-    if (prefix / "conda-meta").is_dir():
-        return InstallMethod.CONDA, None, prefix
-    if (prefix / "pyvenv.cfg").is_file():
-        return InstallMethod.VENV, None, prefix
+    if real.parent.name in _BIN_DIRS:
+        prefix = real.parent.parent
+        if (prefix / "conda-meta").is_dir():
+            return InstallMethod.CONDA, None, prefix
+        if (prefix / "pyvenv.cfg").is_file():
+            return InstallMethod.VENV, None, prefix
 
     if real.name == "uv" and any(
         real.parent in (h / ".local" / "bin", h / ".cargo" / "bin") for h in homes
@@ -119,6 +132,7 @@ def tool_version(path: Path) -> str | None:
             [str(path), "--version"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=VERSION_TIMEOUT,
             stdin=subprocess.DEVNULL,
             check=False,
