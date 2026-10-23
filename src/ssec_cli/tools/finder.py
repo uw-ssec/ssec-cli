@@ -1,7 +1,7 @@
 """Find files by glob under a set of roots, using ripgrep when available."""
 
-import fnmatch
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -55,19 +55,44 @@ def _find_rg(
             cmd, cwd=root, capture_output=True, timeout=120, check=False
         )
     except (subprocess.TimeoutExpired, OSError):
-        return []
+        # A failed scan must not look like "nothing found".
+        return _find_walk(root, patterns, excludes)
     # Exit codes 0, 1 (no match) and 2 (partial errors) are all usable.
     out = proc.stdout.decode("utf-8", errors="surrogateescape")
     return [root / line for line in out.splitlines() if line]
 
 
-def _matches(rel: str, patterns: Sequence[str]) -> bool:
-    for p in patterns:
-        if fnmatch.fnmatchcase(rel, p):
-            return True
-        if p.startswith("**/") and fnmatch.fnmatchcase(rel, p[3:]):
-            return True
-    return False
+def _glob_to_regex(pattern: str) -> "re.Pattern[str]":
+    """Translate an rg/gitignore-style glob to a regex.
+
+    `*` and `?` do not match `/`; `**/` matches zero or more whole directories.
+    A pattern without `/` matches the basename at any depth.
+    """
+    if "/" not in pattern:
+        pattern = "**/" + pattern
+    out = []
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def _matches(rel: str, regexes: Sequence["re.Pattern[str]"]) -> bool:
+    return any(r.match(rel) for r in regexes)
 
 
 def _is_excluded(rel_dir: str, excludes: Sequence[str]) -> bool:
@@ -81,6 +106,7 @@ def _find_walk(
     root: Path, patterns: Sequence[str], excludes: Sequence[str]
 ) -> list[Path]:
     found: list[Path] = []
+    regexes = [_glob_to_regex(p) for p in patterns]
     for dirpath, dirnames, filenames in os.walk(
         root, onerror=lambda e: None, followlinks=False
     ):
@@ -88,7 +114,7 @@ def _find_walk(
         prefix = "" if rel_dir == "." else rel_dir + "/"
         dirnames[:] = [d for d in dirnames if not _is_excluded(prefix + d, excludes)]
         for name in filenames:
-            if _matches(prefix + name, patterns):
+            if _matches(prefix + name, regexes):
                 found.append(Path(dirpath) / name)
     return found
 
