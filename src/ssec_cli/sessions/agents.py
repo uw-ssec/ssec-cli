@@ -27,6 +27,11 @@ class AgentConfig:
     env_override: str
     """Environment variable that overrides the default path."""
 
+    session_subpaths: tuple[str, ...] = ()
+    """Files or directories, relative to the session path, that hold sessions.
+    When set, only these are archived. Used for agents whose path is a general
+    data directory that also holds credentials, logs, or copies of project files."""
+
     def default_path(self) -> Path | None:
         """Return the default path for the current platform, or None if unsupported."""
         return self.default_paths.get(sys.platform)
@@ -85,12 +90,16 @@ ALL_AGENTS: list[AgentConfig] = [
         display_name="Gemini CLI",
         default_paths=_universal_path(".gemini"),
         env_override="GEMINI_DIR",
+        # ~/.gemini also holds OAuth tokens and settings.json (MCP server keys).
+        session_subpaths=("tmp",),
     ),
     AgentConfig(
         name="opencode",
         display_name="OpenCode",
         default_paths=_universal_path(".local/share/opencode"),
         env_override="OPENCODE_DIR",
+        # Leaves out auth.json, logs, and snapshot/ (git copies of project files).
+        session_subpaths=("opencode.db", "storage", "tool-output"),
     ),
     AgentConfig(
         name="amp",
