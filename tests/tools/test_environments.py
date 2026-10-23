@@ -64,9 +64,9 @@ def test_classify(tmp_path, monkeypatch):
     )
     assert classify_env(brew, home) == EnvKind.HOMEBREW
     cask = Path("/opt/homebrew/Caskroom/miniforge/base")
-    monkeypatch.setattr(Path, "is_dir", lambda self: self == cask / "conda-meta")
-    assert classify_env(cask, home) == EnvKind.CONDA
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(Path, "is_dir", lambda self: self == cask / "conda-meta")
+        assert classify_env(cask, home) == EnvKind.CONDA
     assert classify_env(Path("/usr"), home) == EnvKind.SYSTEM
 
 
@@ -286,10 +286,15 @@ def test_unreadable_site_dir_is_none(tmp_path):
         site.chmod(0o755)
 
 
-def test_corrupt_watched_conda_meta_is_none(tmp_path):
+@pytest.mark.parametrize(
+    "body", ["{not json", "{}", "[]", '"x"', '{"name": "certifi"}']
+)
+def test_corrupt_watched_conda_meta_is_none(tmp_path, body):
     env = make_conda_env(tmp_path / "c", {"certifi": "2025.8.3"})
-    (env / "conda-meta" / "certifi-2025.8.3-h0_0.json").write_text("{not json")
+    (env / "conda-meta" / "certifi-2025.8.3-h0_0.json").write_text(body)
     assert read_env_packages(env)[0] is None
+    found = discover_environments(tmp_path, include_path_interpreters=False)
+    assert [e.packages for e in found] == [None]
 
 
 def test_corrupt_unrelated_conda_meta_is_skipped(tmp_path):

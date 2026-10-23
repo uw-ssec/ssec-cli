@@ -178,8 +178,10 @@ def _read_conda_meta(path: Path) -> tuple[dict[str, str], str | None] | None:
         try:
             data = json.loads((meta / entry).read_text())
             name, version = str(data["name"]), str(data["version"])
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError) as e:
             if watched:
+                if isinstance(e, (KeyError, TypeError)):
+                    raise ValueError(f"bad conda-meta file {entry}") from e
                 raise
             continue
         out[normalize_name(name)] = version
