@@ -1,0 +1,5 @@
+# pinned deps
+certifi==2025.8.3 \
+    --hash=sha256:0123456789abcdef
+pip>=20
+requests==2.32.0
