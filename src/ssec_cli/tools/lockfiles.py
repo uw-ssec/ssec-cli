@@ -22,6 +22,7 @@ LOCK_EXCLUDES = (*DEFAULT_EXCLUDES, ".pixi", ".venv", "venv")
 _PIXI_LINE = re.compile(r"^\s*-\s*(conda|pypi):\s*(\S+)\s*$")
 _LEGACY_KIND = re.compile(r"^\s*-\s*kind:\s*(conda|pypi)\s*$")
 _LEGACY_FIELD = re.compile(r"^\s+(name|version):\s*(\S+)\s*$")
+_EMPTY_PACKAGES = re.compile(r"^packages:\s*\[\s*\]\s*$", re.MULTILINE)
 _CONDA_FILE = re.compile(r"^(?P<name>.+)-(?P<ver>[^-]+)-[^-]+\.(conda|tar\.bz2)$")
 _PYPI_FILE = re.compile(r"^(?P<name>[^-]+)-(?P<ver>[^-]+)(-.*\.whl|\.tar\.gz|\.zip)$")
 _REQ_LINE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*===?\s*([^\s;#\\]+)")
@@ -90,7 +91,7 @@ def parse_lockfile(path: Path, packages: Sequence[str] = WATCHED) -> list[LockPi
         text = path.read_text(encoding="utf-8-sig")
         if path.name == "pixi.lock":
             found = _pixi_pins(text) | _pixi_legacy_pins(text)
-            if not found:
+            if not found and not _EMPTY_PACKAGES.search(text):
                 return [LockPin(path, "", None, "unrecognised pixi.lock format")]
         elif path.suffix == ".lock":
             found = _toml_pins(text)

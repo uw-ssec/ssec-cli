@@ -76,9 +76,23 @@ def test_legacy_pixi_lock(tmp_path):
     assert all(p.error is None for p in pins)
 
 
-def test_empty_pixi_lock_is_unrecognised(tmp_path):
+def test_valid_empty_pixi_lock_is_empty(tmp_path):
     f = tmp_path / "pixi.lock"
-    f.write_text("version: 6\npackages:\n")
+    f.write_text(
+        "version: 6\n"
+        "environments:\n"
+        "  default:\n"
+        "    channels:\n"
+        "    - url: https://conda.anaconda.org/conda-forge/\n"
+        "    packages: {}\n"
+        "packages: []\n"
+    )
+    assert parse_lockfile(f) == []
+
+
+def test_unparsable_packages_section_is_unrecognised(tmp_path):
+    f = tmp_path / "pixi.lock"
+    f.write_text("version: 6\npackages:\n  - weird: thing\n")
     pins = parse_lockfile(f)
     assert len(pins) == 1
     assert pins[0].error == "unrecognised pixi.lock format"
