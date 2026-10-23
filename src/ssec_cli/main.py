@@ -10,8 +10,11 @@ from pathlib import Path
 from typing import Tuple
 import typer
 from rich import print
+from rich.console import Console
 
 from ssec_cli.tools.cli import tools_app
+from ssec_cli.tools.evaluate import Status, scan
+from ssec_cli.tools.report import display_path
 
 app = typer.Typer(
     name="ssec-cli",
@@ -110,6 +113,40 @@ def diagnostics():
     check_tools()
     get_git_status()
     get_gh_auth_status()
+    print_tool_versions_summary(Path.home(), Path.cwd())
+
+
+def print_tool_versions_summary(home: Path, project: Path) -> None:
+    """Print outdated/unknown tools (quick scan); no fix commands or notes."""
+    out = Console()
+    print("\n[bold]## Tool versions[/bold]")
+    try:
+        result = scan(home, project, full=False)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not crash
+        out.print(f"Unable to check tool versions: {exc}", markup=False, soft_wrap=True)
+        return
+    flagged = [
+        f for f in result.findings if f.status in (Status.OUTDATED, Status.UNKNOWN)
+    ]
+    if not flagged:
+        out.print("No outdated tools found in PATH or this project.", markup=False)
+    for f in flagged:
+        if f.status is Status.UNKNOWN or not (f.current and f.minimum):
+            versions = "unknown"
+        else:
+            versions = f"{f.current} → {f.minimum}"
+        label = "unknown" if f.status is Status.UNKNOWN else "outdated"
+        where = display_path(f.location, home) if f.location else "PATH"
+        out.print(
+            f"- {f.item} ({label}): {versions} [{where}]",
+            markup=False,
+            soft_wrap=True,
+        )
+    out.print(
+        "Run `ssec tools check` for the full report across all environments.",
+        markup=False,
+        soft_wrap=True,
+    )
 
 
 def get_gh_auth_status():
@@ -188,6 +225,7 @@ def check_tools():
         "uv",
         "pixi",
         "code",
+        "rg",
     ]
 
     print("\n[bold]## Tool availability:[/bold]")
@@ -241,6 +279,7 @@ def update_models(
         args += ["--settings", settings]
 
     import sys as _sys
+
     _sys.argv = [_sys.argv[0]] + args
     _update_models.main()
 
